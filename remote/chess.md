@@ -37,12 +37,16 @@ only (no external dependencies).
 
 - Exactly one optional argument: the computer's maximum think time per move,
   in seconds. `0` means unlimited (search to a sensible fixed maximum depth),
-  e.g. `300` means up to 300 seconds. Default when omitted: 60.
+  e.g. `300` means up to 300 seconds.
 - The limit must be enforced for real (wall clock), not just approximated.
+- The default when omitted is 600.
 
 ## Board display
 
 - The extra stdin command `d` (instead of a move) draws the current board.
+- The extra stdin command `c` (instead of a move) asks the computer to choose
+  and play YOUR move for you (same think-time limit applies); it prints the
+  move it played for you, then answers with its own move as usual.
 - Output EXACTLY 8 lines of EXACTLY 8 characters: rank 8 first (top), rank 1
   last; file a is the leftmost column. No borders, labels, coordinates or
   extra whitespace.
@@ -56,4 +60,4 @@ only (no external dependencies).
   castling, en passant, promotion, checkmate, stalemate, illegal-move
   rejection, the `d` output format, and the think-time cap.
 - Add a short `README.md` in the same directory: build command, usage, the
-  option, and the `d` command.
+  option, and the `d` and `c` commands.
