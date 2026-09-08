@@ -105,6 +105,23 @@ node pages its ~150 GB of local layers into RAM). Expected steady speed for
 Ornith Q8_0: ~24 t/s prompt processing, ~4.5 t/s generation. Server allows 4
 parallel requests (slots).
 
+## Idle cost of leaving the stack up (no clients)
+
+- **CPU ~0** (all processes are event-driven, block on sockets) and **disk growth 0**
+  (no caches, logs only grow per request).
+- **RAM is the only cost, and it's asymmetric:**
+  - *Helpers stay hot forever*: their ~150 GB of tensors live in anonymous heap and
+    the nodes have **no swap** — the kernel physically cannot page them out.
+  - *Main self-cools*: ~145 GB of weights are read-only mmap of the .gguf; under
+    memory pressure the kernel just drops those pages and re-reads them on demand
+    (first request after a quiet spell re-pages, ~1–2 min). Only ~20 GB (KV +
+    buffers) stays hard.
+- **There is no way to "freeze" helpers to disk while keeping the serving alive**:
+  adding swap is a no-go on k8s nodes, SIGSTOP frees no RAM, CRIU checkpointing
+  breaks the live RPC TCP sessions (and restoring ~150 GB costs about a reload
+  anyway), and ggml-rpc-server has no local-file mmap mode. The only two states
+  are: fully hot, or stopped + full ~45 min reload.
+
 ## Stopping everything
 
 Kill by PID only (main first is fine; helpers keep running independently):

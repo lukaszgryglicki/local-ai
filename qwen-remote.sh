@@ -25,7 +25,7 @@ cat > "$h/.qwen/settings.json" <<JSON
   "mcpServers": {},
   "tools": {"exclude": ["report_findings"]},
   "security": {"auth": {"selectedType": "openai"}},
-  "model": {"name": "$REMOTE_MODEL"},
+  "model": {"name": "$REMOTE_MODEL", "chatCompression": {"contextPercentageThreshold": 0.9}},
   "fastModel": "$REMOTE_MODEL",
   "compactionModel": "$REMOTE_MODEL",
   "modelProviders": {"openai": [{

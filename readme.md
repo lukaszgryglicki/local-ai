@@ -136,7 +136,11 @@ RAM+CPU donor, no model file needed — tensors re-stream in at every load;
 no disk cache: measured ~4 min saving on a ~44 min load for ~248 GB written),
 the node holding the .gguf runs `serve-rpc.sh` which auto-discovers helpers
 and serves the usual single OpenAI endpoint. Requires a `-DGGML_RPC=ON`
-build. Measured penalties vs single-node (same hardware class): big models
+build. Idle stack costs ~0 CPU/disk; RAM: helper tensors are anonymous +
+swapless = pinned hot forever, while the main's mmap'd weights auto-evict
+under memory pressure — see remote/rpc.md "Idle cost" for why there is no
+freeze-to-disk middle ground. Measured penalties vs single-node (same
+hardware class): big models
 ~**-5% generation, prompt processing unchanged**; small models suffer more
 (7B ~-15%, 1.5B ~-33%) — the fixed ~1-3 ms/token network cost dominates only
 when per-token compute is tiny. Rule: RPC-split only models that do NOT fit
