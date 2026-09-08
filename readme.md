@@ -28,6 +28,7 @@ agent session costs ~0 (a few cents of electricity, 0 premium requests).
 | health.sh | yes | check server is up AND generates (auth round-trip) |
 | qwen.sh | yes | qwen-code agent against the local model (host) |
 | copilot.sh | yes | GitHub Copilot CLI + local model (run in the VM) |
+| remote/ | yes | reference copies of the remote big-model server scripts: serve.sh, serve-new.sh (tuned, +MTP), qwen.sh, health.sh, bench harnesses |
 | llama | yes | tiny launcher; libs load via RUNPATH from the POC build dir `/data/ai/local-agent-poc/src/llama.cpp/build-vulkan/bin` — keep that dir |
 | readme.md | yes | this file |
 | model.gguf | no (.gitignore) | Qwen3-Coder-30B-A3B-Instruct Q8_0, 30.25 GiB |
@@ -91,6 +92,38 @@ First working config: input 68.5 tok/s, output 1.6 tok/s. Final config:
    acceptance across real coding sessions ≈ roughly 2x effective output;
    echo tasks (project-file edits) hit 34.6 tok/s with 100% acceptance.
    Works with q8 KV via checkpoint mode in this fork.
+
+## Speculative decoding upgrades: ngram-mod + MTP (remote/serve-new.sh)
+
+A dedicated tuning pass on the remote big-MoE server (harnesses in
+remote/bench*.sh) found two lossless generation-speed upgrades; both are
+generic llama.cpp features worth knowing about beyond that box:
+
+- **ngram-mod** (`--spec-type ngram-mod`): rolling-hash self-speculation
+  (~16 MB state), a strict upgrade over ngram-simple there — never worse
+  than baseline, up to ~2.6x on edit/repeat-heavy agent turns.
+- **MTP draft head** (`--spec-type draft-mtp`): some model families ship a
+  small companion multi-token-prediction GGUF (a single extra decoder
+  block, ~2.4 GB at Q4_K_M). It drafts a few tokens ahead; the main model
+  batch-verifies them — output distribution mathematically unchanged.
+  Measured: +20-25% on NOVEL generation (where ngram methods get nothing;
+  draft acceptance 0.85-0.91, matching the head author's GPU numbers),
+  cost ~5% slower prompt processing.
+- **Best: both combined** — MTP covers novel text, ngram-mod covers
+  repeats: `--model-draft <mtp-head.gguf> --spec-type draft-mtp,ngram-mod
+  --spec-draft-n-max 6 --spec-draft-p-min 0.75`
+  (+ env `LLAMA_ATTN_ROT_DISABLE=1` when using quantized q8_0 KV).
+  remote/serve-new.sh wires this up and auto-falls back to plain
+  ngram-mod when the head or the MTP-capable binary is absent.
+- Caveat: stock llama.cpp v0.4.0 lacks the MTP graph for that model
+  family (upstream PR closed unmerged); the remote build carries a small
+  port of it. Q4_K_M head measured as good as BF16 at a third of the RAM;
+  draft depth 6 beat depth 3 on repeats at equal cold-gen speed.
+- Host note: this box's serve.sh stays on ngram-simple (71-74% acceptance
+  measured here, and no MTP head exists for its model). ngram-mod is worth
+  a try on the host someday, but it is untested against the Vulkan
+  pipeline — verify against the real server first (see rules below).
+
 
 ## ZFS: why the model has its own dataset
 
