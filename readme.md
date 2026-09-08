@@ -28,7 +28,7 @@ agent session costs ~0 (a few cents of electricity, 0 premium requests).
 | health.sh | yes | check server is up AND generates (auth round-trip) |
 | qwen.sh | yes | qwen-code agent against the local model (host) |
 | copilot.sh | yes | GitHub Copilot CLI + local model (run in the VM) |
-| remote/ | yes | reference copies of the remote big-model server scripts: serve.sh, serve-new.sh (tuned, +MTP), qwen.sh, health.sh, bench harnesses |
+| remote/ | yes | reference copies of the remote big-model server scripts: serve.sh, serve-new.sh (tuned, +MTP), qwen.sh, health.sh |
 | llama | yes | tiny launcher; libs load via RUNPATH from the POC build dir `/data/ai/local-agent-poc/src/llama.cpp/build-vulkan/bin` — keep that dir |
 | readme.md | yes | this file |
 | model.gguf | no (.gitignore) | Qwen3-Coder-30B-A3B-Instruct Q8_0, 30.25 GiB |
@@ -95,9 +95,9 @@ First working config: input 68.5 tok/s, output 1.6 tok/s. Final config:
 
 ## Speculative decoding upgrades: ngram-mod + MTP (remote/serve-new.sh)
 
-A dedicated tuning pass on the remote big-MoE server (harnesses in
-remote/bench*.sh) found two lossless generation-speed upgrades; both are
-generic llama.cpp features worth knowing about beyond that box:
+A dedicated tuning pass on the remote big-MoE server found two lossless
+generation-speed upgrades; both are generic llama.cpp features worth
+knowing about beyond that box:
 
 - **ngram-mod** (`--spec-type ngram-mod`): rolling-hash self-speculation
   (~16 MB state), a strict upgrade over ngram-simple there — never worse
