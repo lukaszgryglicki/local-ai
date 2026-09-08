@@ -50,6 +50,8 @@ SPEC_ARGS=""; [ "$SPEC" = "1" ] && SPEC_ARGS="--spec-type ngram-mod --spec-draft
 alias=$(basename "$m" .gguf)
 echo "main=$own rpc=$RPC model=$m ngl=$NGL par=$PAR yarn=${YARN}x port=$PORT"
 export LD_LIBRARY_PATH=$b
+export LLAMA_CACHE=/data/ai/cache   # keep any llama.cpp caches off the small root fs
+mkdir -p "$LLAMA_CACHE"
 exec systemd-run --scope --collect -q \
   -p MemoryHigh=190G -p MemoryMax=200G -p AllowedCPUs=0-43 \
   nice -n 5 "$b/llama-server" -m "$m" --alias "$alias" \

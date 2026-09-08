@@ -28,7 +28,7 @@ agent session costs ~0 (a few cents of electricity, 0 premium requests).
 | health.sh | yes | check server is up AND generates (auth round-trip) |
 | qwen.sh | yes | qwen-code agent against the local model (host) |
 | copilot.sh | yes | GitHub Copilot CLI + local model (run in the VM) |
-| remote/ | yes | reference copies of the remote big-model server scripts: serve.sh, serve-new.sh (tuned, +MTP), serve-rpc.sh + start-rpc.sh (multi-node RPC, current production), qwen.sh, health.sh |
+| remote/ | yes | reference copies of the remote big-model server scripts: serve.sh, serve-new.sh (tuned, +MTP), serve-rpc.sh + start-rpc.sh (multi-node RPC, current production), rpc.md (step-by-step RPC runbook), qwen.sh, health.sh |
 | llama | yes | tiny launcher; libs load via RUNPATH from the POC build dir `/data/ai/local-agent-poc/src/llama.cpp/build-vulkan/bin` — keep that dir |
 | readme.md | yes | this file |
 | model.gguf | no (.gitignore) | Qwen3-Coder-30B-A3B-Instruct Q8_0, 30.25 GiB |
@@ -126,6 +126,9 @@ knowing about beyond that box:
 
 
 ## Multi-node RPC serving (remote/serve-rpc.sh + remote/start-rpc.sh)
+
+Step-by-step start/stop runbook (helpers → main server → tunnel → qwen):
+see **remote/rpc.md**.
 
 llama.cpp's GGML RPC backend splits ONE model's layers across several boxes
 over a private LAN: helpers run `start-rpc.sh` (a bare `ggml-rpc-server`,

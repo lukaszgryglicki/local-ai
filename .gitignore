@@ -1,2 +1,4 @@
 *.gguf
 *.secret
+*.secret
+*.swp
