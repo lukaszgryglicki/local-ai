@@ -28,7 +28,7 @@ agent session costs ~0 (a few cents of electricity, 0 premium requests).
 | health.sh | yes | check server is up AND generates (auth round-trip) |
 | qwen.sh | yes | qwen-code agent against the local model (host) |
 | copilot.sh | yes | GitHub Copilot CLI + local model (run in the VM) |
-| remote/ | yes | reference copies of the remote big-model server scripts: serve.sh, serve-new.sh (tuned, +MTP), qwen.sh, health.sh |
+| remote/ | yes | reference copies of the remote big-model server scripts: serve.sh, serve-new.sh (tuned, +MTP), serve-rpc.sh + start-rpc.sh (multi-node RPC, current production), qwen.sh, health.sh |
 | llama | yes | tiny launcher; libs load via RUNPATH from the POC build dir `/data/ai/local-agent-poc/src/llama.cpp/build-vulkan/bin` — keep that dir |
 | readme.md | yes | this file |
 | model.gguf | no (.gitignore) | Qwen3-Coder-30B-A3B-Instruct Q8_0, 30.25 GiB |
@@ -124,6 +124,36 @@ knowing about beyond that box:
   a try on the host someday, but it is untested against the Vulkan
   pipeline — verify against the real server first (see rules below).
 
+
+## Multi-node RPC serving (remote/serve-rpc.sh + remote/start-rpc.sh)
+
+llama.cpp's GGML RPC backend splits ONE model's layers across several boxes
+over a private LAN: helpers run `start-rpc.sh` (a bare `ggml-rpc-server`,
+RAM+CPU donor, no model file needed — tensors stream in and are disk-cached),
+the node holding the .gguf runs `serve-rpc.sh` which auto-discovers helpers
+and serves the usual single OpenAI endpoint. Requires a `-DGGML_RPC=ON`
+build. Measured penalties vs single-node (same hardware class): big models
+~**-5% generation, prompt processing unchanged**; small models suffer more
+(7B ~-15%, 1.5B ~-33%) — the fixed ~1-3 ms/token network cost dominates only
+when per-token compute is tiny. Rule: RPC-split only models that do NOT fit
+on one box.
+
+Current production default in serve-rpc.sh: **Ornith-1.5-397B Q8_0**
+(428.5 GB, qwen35moe MoE, A17B, SWE-bench-Verified 86.0) split across
+3× 256 GB nodes — 4 parallel slots, YaRN knob `YARN=2` default (524288
+ctx/slot, ~lossless 2x over the 262144 native; `YARN=1` = native max
+quality, `YARN=4` = 1M/slot with softer long-range recall; hybrid linear
+attention keeps KV at ~4 KB/token ⇒ all modes afford 4 slots), f16 KV,
+ngram-mod speculation, sampling per model card (temp 0.6 / top-p 0.95 /
+top-k 20). Historical single-node modes (serve.sh, serve-new.sh) stay
+available unchanged.
+
+**NEXT MODEL (planned upgrade)**: **GLM-5.3-Flash Q8_0** (341 GB, TRUE 1M
+native context, 320B-A18B, reasoning-effort control) as soon as llama.cpp
+**PR #27754** (`glm5_next` arch, by Unsloth) merges to master — as of
+2026-09-08 the PR still has an unresolved long-context repeating-token
+collapse bug (65-253K depth, Metal+CUDA), so building the PR branch early
+was rejected; re-check the PR every week or two.
 
 ## ZFS: why the model has its own dataset
 

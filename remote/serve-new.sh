@@ -1,17 +1,17 @@
 #!/bin/sh
-# /data/ai/serve-new.sh - Qwen3.8-Flash-Next UD-Q6_K_XL on devstats-compute-02 (CPU only).
-# Bench-tuned rewrite of serve.sh (2026-09-08, test-db-02 A/B results — llama-speed-research.md):
-#   nice 19->5        llama is 2nd priority after devstats, but not starved
-#   threads 24->16    same tok/s (bandwidth-bound), +8 cores back to devstats
+# /data/ai/serve-new.sh - Qwen3.8-Flash-Next UD-Q6_K_XL on the big-MoE serving node (CPU only).
+# Bench-tuned rewrite of serve.sh (2026-09-08 A/B results — llama-speed-research.md):
+#   nice 19->5        llama is 2nd priority after the primary workload, but not starved
+#   threads 24->16    same tok/s (bandwidth-bound), +8 cores back to the primary workload
 #   cache-ram -1      kills prompt-cache evictions (93/day -> ~0) & 5-15 min re-prefills
 #   ngram-simple->draft-mtp,ngram-mod  MTP head: +25% cold gen (accept ~0.9);
 #                     ngram-mod: up to +160% on edit/repeat loops; combo best everywhere
 # MTP needs the PATCHED binary (qwen4exp MTP graph port) + the draft head gguf:
-#   rsync test-db-02:/data/ai/src/llama.cpp  -> /data/ai/src/  (build/bin/llama-server)
-#   rsync test-db-02:/data/ai/models-small/Qwen3.8-Flash-Next-MTP-Q4_K_M.gguf -> /data/ai/models-small/
+#   rsync <model-node>:/data/ai/src/llama.cpp  -> /data/ai/src/  (build/bin/llama-server)
+#   rsync <model-node>:/data/ai/models-small/Qwen3.8-Flash-Next-MTP-Q4_K_M.gguf -> /data/ai/models-small/
 # Falls back to stock binary + ngram-mod alone when either is missing.
 # Loopback-only (:18080) - reach remotely via ssh -L tunnel.
-# Jailed: MemoryHigh 190G / MemoryMax 200G, cores 0-43 (12 left for devstats).
+# Jailed: MemoryHigh 190G / MemoryMax 200G, cores 0-43 (12 left for the primary workload).
 d=$(dirname "$(realpath "$0")")
 # EFFORT=medium ./serve-new.sh to lower reasoning (default xhigh); levels: low|medium|xhigh
 EFFORT=${EFFORT:-xhigh}

@@ -10,6 +10,6 @@ echo "$h" | grep -q '"ok"\|ok' || { echo "UNHEALTHY: $h"; exit 1; }
 r=$(curl -s -m 300 "$u/v1/chat/completions" \
   -H "Authorization: Bearer $(cat "$d/remote-key.secret")" \
   -H "Content-Type: application/json" \
-  -d '{"model":"qwen38flash","messages":[{"role":"user","content":"Reply with exactly: OK"}],"max_tokens":512,"temperature":0}')
+  -d '{"model":"default","messages":[{"role":"user","content":"Reply with exactly: OK"}],"max_tokens":512,"temperature":0}')
 echo "$r" | grep -q '"content"' || { echo "SERVED BUT NOT GENERATING: $r"; exit 1; }
-echo "HEALTHY: remote server up, model generating ($u, alias qwen38flash)"
+echo "HEALTHY: remote server up, model generating ($u)"

@@ -1,5 +1,5 @@
 #!/bin/sh
-# /data/ai/qwen.sh - coding session against the local server (compute-02).
+# /data/ai/qwen.sh - coding session against the local server on this node.
 # Throwaway HOME; internet tools enabled; report_findings excluded (grammar bug).
 # max_tokens 32768: thinking output shares the per-turn budget (xhigh thinks A LOT).
 # NO short client caps: qwen-code's default 15-min stream-lifetime guard kills long
@@ -22,7 +22,7 @@ cat > "$h/.qwen/settings.json" <<'EOF'
   "compactionModel": "qwen38flash",
   "modelProviders": {"openai": [{
     "id": "qwen38flash",
-    "name": "Qwen3.8-Flash-Next Q6 (linode CPU)",
+    "name": "Qwen3.8-Flash-Next Q6 (remote CPU)",
     "envKey": "LOCAL_LLM_API_KEY",
     "baseUrl": "http://127.0.0.1:18080/v1",
     "generationConfig": {

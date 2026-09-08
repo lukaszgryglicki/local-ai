@@ -1,7 +1,7 @@
 #!/bin/sh
-# /data/ai/serve.sh - Qwen3.8-Flash-Next UD-Q6_K_XL on devstats-compute-02 (CPU only).
+# /data/ai/serve.sh - Qwen3.8-Flash-Next UD-Q6_K_XL on the big-MoE serving node (CPU only).
 # Loopback-only (:18080) - reach remotely via ssh -L tunnel. parallel=1 like tuxedo.
-# Jailed: MemoryHigh 190G / MemoryMax 200G, cores 0-43 (12 left for devstats), nice 19.
+# Jailed: MemoryHigh 190G / MemoryMax 200G, cores 0-43 (12 left for the primary workload), nice 19.
 # Weights are mmap'd (file-backed, kernel-reclaimable) -> cannot OOM the node.
 d=$(dirname "$(realpath "$0")")
 # EFFORT=medium ./serve.sh to lower reasoning (default xhigh); levels: low|medium|xhigh
