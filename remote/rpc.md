@@ -13,8 +13,10 @@ FreeBSD host ──ssh tunnel──> main node (llama-server :18080, 127.0.0.1 o
                                └── helper 2  10.60.0.32:50052 (ggml-rpc-server)
 ```
 
-Every file lives under `/data/ai` on the nodes (never the root fs — caches
-included: `LLAMA_CACHE=/data/ai/cache`). All AI processes are systemd-jailed
+Every file lives under `/data/ai` on the nodes (never the root fs). No disk
+caches are used (RPC tensor cache removed 2026-09-08: it saved only ~4 min of
+a ~44 min load — the synchronous per-tensor RPC walk is the bottleneck — while
+writing ~248 GB to disk). All AI processes are systemd-jailed
 (memory-capped, cores 0–43, nice 5) so the nodes' primary tenants always win.
 
 ## Step 1 — start the RPC servers on BOTH helper nodes
@@ -54,9 +56,10 @@ and refuses to start Ornith unless BOTH are up. Wait for:
 srv  llama_server: listening on http://127.0.0.1:18080
 ```
 
-Load time: ~45 min on a cold first load (streams ~250 GB to helpers over the
-VLAN), **~10–15 min on restarts** (helpers reload their share from the local
-`/data/ai/cache/rpc` tensor cache instead of the network).
+Load time: **~45 min, every start** (streams ~250 GB to helpers over the VLAN).
+The load is a synchronous per-tensor walk, single-threaded on both ends
+(~110 MB/s ceiling), so the on-disk tensor cache never sped it up meaningfully
+— measured, then removed.
 
 Optional local check on the main node:
 
@@ -113,8 +116,8 @@ kill $(pgrep -x llama-server)
 kill $(pgrep -x ggml-rpc-server)
 ```
 
-The tensor caches under /data/ai/cache/rpc persist — that's what makes the next
-start fast. Safe to delete if disk is needed; the next load just re-streams.
+Nothing persists between runs: no tensor caches are written (removed 2026-09-08
+— negligible speedup, ~248 GB of disk). Every start re-streams from the main node.
 
 ## Knobs (serve-rpc.sh)
 

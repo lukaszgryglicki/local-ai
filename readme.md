@@ -132,7 +132,8 @@ see **remote/rpc.md**.
 
 llama.cpp's GGML RPC backend splits ONE model's layers across several boxes
 over a private LAN: helpers run `start-rpc.sh` (a bare `ggml-rpc-server`,
-RAM+CPU donor, no model file needed — tensors stream in and are disk-cached),
+RAM+CPU donor, no model file needed — tensors re-stream in at every load;
+no disk cache: measured ~4 min saving on a ~44 min load for ~248 GB written),
 the node holding the .gguf runs `serve-rpc.sh` which auto-discovers helpers
 and serves the usual single OpenAI endpoint. Requires a `-DGGML_RPC=ON`
 build. Measured penalties vs single-node (same hardware class): big models
