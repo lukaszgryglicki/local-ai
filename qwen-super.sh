@@ -1,11 +1,18 @@
 #!/bin/sh
 # /data/local-ai/qwen-super.sh - crash-proof supervisor for headless qwen runs.
 # Fixes the 2026-09-08 overnight failure: tunnel/network flapped -> qwen got
-# ECONNREFUSED -> exited for good -> 5.5h of idle serving. tunnel.sh already
-# auto-heals itself; this makes the CLIENT side survive too:
-#   - waits until the model endpoint is healthy before every (re)launch,
-#   - relaunches qwen after ANY crash/exit, with a resume-from-workspace prompt,
-#   - stops only when the task itself touches DONE_FILE (or MAX_TRIES is hit).
+# ECONNREFUSED -> exited for good -> 5.5h of idle serving.
+#
+# Three defense layers (inner to outer):
+#   1. qwen-remote.sh sets maxRetries=5000: the openai SDK itself retries
+#      connection errors/429/5xx (backoff capped ~8s) for ~11h -> a dropped
+#      tunnel BETWEEN requests no longer kills the turn.
+#   2. A drop MID-STREAM still fails the process -> this supervisor relaunches
+#      it with `qwen -c` = REAL session resume (chat recording is on by
+#      default): the model gets its full previous conversation back, like
+#      `claude --resume` / `copilot --resume`.
+#   3. If no recorded session exists (first run / recording disabled), it
+#      falls back to a resume-from-workspace-state prompt.
 #
 #   usage: qwen-super.sh WORKSPACE PROMPT-FILE [LOGFILE]
 #   knobs: MAX_TRIES=50, DONE_FILE=WORKSPACE/DONE,
@@ -15,27 +22,32 @@
 #     daemon -o /dev/null /data/local-ai/qwen-super.sh \
 #       ~/task/project ~/task/PROMPT.md ~/task/qwen.log
 #
-# Crash-safety rules are appended to every prompt: work in small increments
-# (write files / git commit constantly - a crash loses anything not on disk)
-# and touch DONE_FILE only when the whole task is complete.
+# Crash-safety rules are appended to the initial prompt: work in small
+# increments (write files / git commit constantly - only disk + the recorded
+# session survive a crash) and touch DONE_FILE only when fully complete.
 ws=$1; pf=$2
 [ -d "$ws" ] && [ -s "$pf" ] || { echo "usage: $0 WORKSPACE PROMPT-FILE [LOGFILE]"; exit 1; }
 ws=$(realpath "$ws"); pf=$(realpath "$pf")
 log=${3:-$ws/qwen.log}
 d=$(dirname "$(realpath "$0")")
+qhome=/tmp/remote-ai-qwen-home   # must match h= in qwen-remote.sh
 DONE_FILE=${DONE_FILE:-$ws/DONE}
 HEALTH_URL=${HEALTH_URL:-http://127.0.0.1:18081/health}
 MAX_TRIES=${MAX_TRIES:-50}
-mark=$ws/.qwen-super-started
 ts() { date -u +%H:%M:%SZ; }
+has_session() {
+  # chats live under .qwen/projects/<cwd-with-dashes>/chats/*.jsonl
+  pdir=$(printf '%s' "$ws" | tr '/' '-')
+  set -- "$qhome/.qwen/projects/$pdir/chats/"*.jsonl
+  [ -s "$1" ]
+}
 sfx="
 
 SUPERVISOR RULES (crash-safety - appended by qwen-super.sh):
-- Your process can be killed at ANY moment (network outages happen) and will be
-  restarted. Only what is ON DISK survives. Therefore: write every file as soon
-  as it is drafted and git commit after every meaningful step. NEVER build up a
-  long design or big code in one huge reply - persist it in small pieces first.
-- Keep each reply short; put substance into files via tools, not into chat text.
+- Your process can be killed at ANY moment (network outages happen); it will be
+  resumed. Persist relentlessly anyway: write every file as soon as it is
+  drafted and git commit after every meaningful step. Never build a long design
+  or big code only inside a chat reply - put it on disk in small pieces first.
 - When and only when the WHOLE task is fully complete, run: touch $DONE_FILE"
 try=0
 while [ ! -f "$DONE_FILE" ] && [ "$try" -lt "$MAX_TRIES" ]; do
@@ -45,18 +57,20 @@ while [ ! -f "$DONE_FILE" ] && [ "$try" -lt "$MAX_TRIES" ]; do
     [ $((n % 10)) -eq 0 ] && echo "[$(ts)] super: endpoint down, waiting ($HEALTH_URL)" >> "$log"
     n=$((n+1)); sleep 30
   done
-  if [ ! -e "$mark" ]; then
-    p="$(cat "$pf")$sfx"
+  if [ "$try" -eq 1 ] && ! has_session; then
+    mode=fresh
+    set -- -y -p "$(cat "$pf")$sfx"
+  elif has_session; then
+    mode=session-resume
+    set -- -y -c -p "You were interrupted (crash or network outage) and this session was resumed. Re-check the workspace state (files may differ from what you remember), then continue the task to completion under the same rules. Reminder: touch $DONE_FILE only when fully complete."
   else
-    p="You are RESUMING an interrupted autonomous task (previous run was killed,
-e.g. by a network outage). First re-read the full task: $pf
+    mode=workspace-resume
+    set -- -y -p "You are RESUMING an interrupted autonomous task. First re-read the full task: $pf
 Then inspect the workspace (ls -laR, git log, STATUS/DEVLOG if present) to see
-what is already done. Then continue from where it stopped, following all the
-original rules.$sfx"
+what is already done, and continue from there under the original rules.$sfx"
   fi
-  : > "$mark"
-  echo "[$(ts)] super: attempt $try/$MAX_TRIES launching qwen" >> "$log"
-  ( cd "$ws" && QWEN_CODE_SUPPRESS_YOLO_WARNING=1 "$d/qwen-remote.sh" -y -p "$p" >> "$log" 2>&1 )
+  echo "[$(ts)] super: attempt $try/$MAX_TRIES launching qwen ($mode)" >> "$log"
+  ( cd "$ws" && QWEN_CODE_SUPPRESS_YOLO_WARNING=1 "$d/qwen-remote.sh" "$@" >> "$log" 2>&1 )
   rc=$?
   echo "[$(ts)] super: attempt $try exited rc=$rc" >> "$log"
   [ -f "$DONE_FILE" ] || sleep 15

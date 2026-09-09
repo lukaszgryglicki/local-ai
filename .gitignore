@@ -2,3 +2,4 @@
 *.secret
 *.secret
 *.swp
+__pycache__/

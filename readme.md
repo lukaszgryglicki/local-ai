@@ -154,26 +154,29 @@ on one box.
 
 Current production default in serve-rpc.sh: **Ornith-1.5-397B Q8_0**
 (428.5 GB, qwen35moe MoE, A17B, SWE-bench-Verified 86.0) split across
-3× 256 GB nodes — 4 parallel slots, YaRN knob `YARN=2` default (524288
-ctx/slot, ~lossless 2x over the 262144 native; `YARN=1` = native max
-quality, `YARN=4` = 1M/slot with softer long-range recall; hybrid linear
+3× 256 GB nodes — 4 parallel slots, YaRN knob `YARN=1` default since
+2026-09-09 (native 262144 ctx/slot, max quality — overnight runs never passed
+~53K; `YARN=2` = 524288/slot ~lossless, `YARN=4` = 1M/slot with softer
+long-range recall; hybrid linear
 attention keeps KV at ~4 KB/token ⇒ all modes afford 4 slots), f16 KV,
 ngram-mod speculation, sampling per model card (temp 0.6 / top-p 0.95 /
 top-k 20). Historical single-node modes (serve.sh, serve-new.sh) stay
 available unchanged.
 
 **Generation speed decays with context depth** (measured 2026-09-08: tg
-3.0 t/s @24K → 1.34 @53K). Mitigations: client `COMPACT=0.05-0.10` (compact
+3.0 t/s @24K → 1.34 @53K). Mitigations: client `COMPACT=0.1-0.2` (compact
 early, keeps tg in the fast band — ~2x effective overnight throughput) and
 untested server knobs `FA=on KVQ=q8_0`, `THREADS=24|32` — details in
 remote/rpc.md "Generation speed vs context depth".
 
 **Unattended runs must use qwen-super.sh** (2026-09-08 lesson: a home↔Linode
 network flap killed the raw qwen process mid-task; the tunnel self-healed but
-the client never came back). The supervisor health-gates every launch,
-relaunches with a resume prompt after any exit, injects crash-safety rules
-(persist small increments, commit often) and stops when the task touches
-DONE — see remote/rpc.md "Unattended / overnight runs".
+the client never came back). Three layers now: maxRetries 5000 in
+qwen-remote.sh (SDK retries between-request failures ~11 h), qwen-super.sh
+relaunches after mid-stream kills with REAL session resume (`qwen -c`, chat
+recording is on by default) plus health-gating and a DONE-file stop, and a
+workspace-state fallback prompt when no session exists — see remote/rpc.md
+"Unattended / overnight runs".
 
 **NEXT MODEL (planned upgrade)**: **GLM-5.3-Flash Q8_0** (341 GB, TRUE 1M
 native context, 320B-A18B, reasoning-effort control) as soon as llama.cpp

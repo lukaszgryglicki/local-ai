@@ -93,7 +93,8 @@ Quick end-to-end check through the tunnel:
 /data/local-ai/qwen-remote.sh
 ```
 
-Defaults to the 3-node model (`ornith15-397b`: 524,288 ctx/slot, temp 0.6,
+Defaults to the 3-node model (`ornith15-397b`: native 262,144 ctx/slot — YARN=1
+server default since 2026-09-09; the overnight run never passed ~53K — temp 0.6,
 top-p 0.95, top-k 20, no client-side timeouts). Legacy single-node model instead:
 
 ```sh
@@ -109,16 +110,27 @@ parallel requests (slots).
 
 Lesson from 2026-09-08: a home↔Linode network flap killed qwen mid-task
 (ECONNREFUSED, client `maxRetries` was 1) and the stack idled 5.5 h. The
-tunnel self-healed (its retry loop works); the client did not. Fixes:
+tunnel self-healed (its retry loop works); the client did not. Three defense
+layers now (inner → outer):
 
-- `qwen-remote.sh`: `maxRetries` now 8 — rides out blips of seconds.
-- `/data/local-ai/qwen-super.sh` — supervisor for anything longer: waits for
-  `/health` before every launch, relaunches qwen with a resume-from-workspace
-  prompt after ANY exit, and stops only when the task itself creates `DONE` in
-  the workspace (or MAX_TRIES=50). It appends crash-safety rules to every
-  prompt (persist in small increments, git commit constantly, short replies)
-  so a restart loses minutes, not hours — the 2026-09-08 run lost a 26K-token
-  design because the model kept it all in one 3 h reply.
+1. `qwen-remote.sh` sets `maxRetries: 5000`: the openai SDK itself retries
+   connection errors/429/5xx with backoff (caps ~8 s) — qwen keeps RETRYING
+   for up to ~11 h instead of dying when the failure happens BETWEEN requests.
+2. A failure MID-STREAM still kills the turn → `/data/local-ai/qwen-super.sh`
+   relaunches with **real session resume** (`qwen -c`, same as
+   `claude/copilot --resume`): chat recording is on by default
+   (`general.chatRecording`), sessions live under the qwen HOME
+   (`/tmp/remote-ai-qwen-home/.qwen/projects/<cwd>/chats/*.jsonl`), so the
+   model gets its full prior conversation back. The supervisor also
+   health-gates every launch on `/health` and stops only when the task itself
+   creates `DONE` in the workspace (or MAX_TRIES=50).
+3. No recorded session (first run / recording off) → fallback to a
+   resume-from-workspace-state prompt.
+
+The supervisor appends crash-safety rules to the initial prompt (persist in
+small increments, git commit constantly) — the 2026-09-08 run lost a 26K-token
+design because the model kept it all in one 3 h reply (later salvaged from the
+recorded session JSONL — another reason chat recording must stay on).
 
 ```sh
 daemon -o /dev/null /data/local-ai/qwen-super.sh \
@@ -133,8 +145,8 @@ Measured on Ornith Q8_0 (2026-09-08): tg 3.0 t/s @24K ctx → 2.46 @27K → 1.34
 @53K (KV scan on the 15 full-attn layers; deep prefill also drops 26→8 t/s).
 The decay is physics (attention cost grows with depth), but its impact can be cut:
 
-- **client**: `COMPACT=0.05-0.10 qwen-remote.sh` — auto-compact (summarize) at
-  5–10% of the 524K window, capping working ctx at ~26–52K where tg is still
+- **client**: `COMPACT=0.1-0.2 qwen-remote.sh` — auto-compact (summarize) at
+  10–20% of the 262K window, capping working ctx at ~26–52K where tg is still
   2.5–3 t/s. Costs a summary + small re-prefill (~10 min) every few hours ≈
   ~2x effective overnight throughput. Keep the 0.9 default for interactive
   work where fidelity matters more.
