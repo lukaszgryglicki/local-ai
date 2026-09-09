@@ -5,25 +5,44 @@
 # PRODUCTION DEFAULT (2026-09-08): Ornith-1.5-397B Q8_0 (428.5 GB) split across
 # 3 nodes; run this on the node holding models/Ornith-1.5-397B-Q8_0.gguf.
 #   NGL=40 of 60 layers -> remotes (memory-proportional ~20+20), ~20 local (~143 GB/node)
-#   PAR=4 slots; YARN=2 default: 524288 ctx/slot via YaRN 2x (~lossless).
-#     YARN=1 = native 262144/slot (max quality), YARN=4 = 1M/slot (soft long-range recall).
+#   PAR=4 slots; YARN=1 default (2026-09-09): native 262144 ctx/slot, max quality
+#     - the 12h overnight run never exceeded ~53K, so no YaRN extension by default.
+#     YARN=2 = 524288/slot via YaRN 2x (~lossless), YARN=4 = 1M/slot (soft recall).
 #     KV is ~4 KB/token (hybrid linear attn, 15/60 full-attn layers, f16 cache):
 #     4 slots cost ~4/8/16 GB at 1x/2x/4x - PAR stays 4 in every mode.
 #   ngram-mod speculation (no MTP sidecar GGUF published for the 397B yet; SPEC=0 off)
 #   sampling per Ornith generation_config: temp 0.6 / top-p 0.95 / top-k 20
 #   jailed like serve-new.sh: MemoryHigh 190G / Max 200G, cores 0-43, nice 5
 #
-# NEXT MODEL: GLM-5.3-Flash Q8_0 (341 GB, TRUE 1M native ctx, A18B, effort control)
-#   once llama.cpp PR #27754 (glm5_next) merges - as of 2026-09-08 the PR still has an
-#   unresolved long-context repeating-token collapse bug, so we wait for the merge.
+# tg DECAYS with context depth (measured 2026-09-08: 3.0 t/s @24K -> 1.34 @53K;
+# KV scan on the 15 full-attn layers). Optional mitigations, OFF by default, to
+# A/B on the next run (defaults keep the proven f16/no-FA config):
+#   FA=on       flash attention (also prerequisite for quantized V cache)
+#   KVQ=q8_0    quantize KV cache K+V -> ~halves KV memory traffic at depth,
+#               quality impact ~nil; V-quant needs FA=on
+#   THREADS=24|32  llama.cpp PR#27754 field reports: absolute 24-32 threads is
+#               the CPU-MoE tg sweet spot (we default 16 - worth an A/B)
+# Client-side lever: COMPACT=0.05-0.10 in qwen-remote.sh caps working ctx where
+# tg is still 2.5-3 t/s.
+#
+# NEXT MODEL: GLM-5.3-Flash Q8_0 (320.76B MoE A18B, TRUE 1M native ctx, effort
+#   control) once llama.cpp PR #27754 (glm5_next) merges. Status 2026-09-09:
+#   still OPEN, but the long-context repeating-token ("@") collapse turned out
+#   METAL-ONLY (int32 dst-offset overflow in mul_mm.metal past 2^31; CPU-only is
+#   clean at the same depth) -> does NOT affect this all-CPU rig. Remaining
+#   blocker for agent use: branch still has supports_tool_calls=false (template).
+#   Perf outlook vs Ornith at equal Q8: similar tg (A18B vs Ornith's A17B); the
+#   wins are TRUE 1M ctx (no YaRN) + community-validated small quants: unsloth
+#   UD-IQ4_XS (~147 GB) fits ONE node = no RPC hops (reported several-x tg vs Q8).
 #
 # Historical POC mode (small models) still available via knobs, e.g.:
 #   MODEL=qwen25-coder-7b-q4km NGL=18 YARN=1 CTX=32768 PORT=18081 SPEC=0 ./serve-rpc.sh
-# Knobs: MODEL PAR YARN NGL PORT RPC THREADS TB SPEC CTX (total-ctx override) NATIVE
+# Knobs: MODEL PAR YARN NGL PORT RPC THREADS TB SPEC CTX (total-ctx override) NATIVE FA KVQ
 d=$(dirname "$(realpath "$0")")
 b=$d/src/llama.cpp/build-rpc/bin; [ -x "$b/llama-server" ] || b=$d/rpc-bin
-PAR=${PAR:-4}; YARN=${YARN:-2}; NATIVE=${NATIVE:-262144}
+PAR=${PAR:-4}; YARN=${YARN:-1}; NATIVE=${NATIVE:-262144}
 NGL=${NGL:-40}; PORT=${PORT:-18080}; THREADS=${THREADS:-16}; TB=${TB:-44}; SPEC=${SPEC:-1}
+FA=${FA:-}; KVQ=${KVQ:-}
 MODEL=${MODEL:-Ornith-1.5-397B-Q8_0}
 case "$MODEL" in
   /*) m=$MODEL ;;
@@ -47,6 +66,9 @@ else
   CTX_ARGS="--ctx-size ${CTX:-$((NATIVE*YARN*PAR))} --parallel $PAR --rope-scaling yarn --rope-scale $YARN.0 --yarn-orig-ctx $NATIVE"
 fi
 SPEC_ARGS=""; [ "$SPEC" = "1" ] && SPEC_ARGS="--spec-type ngram-mod --spec-draft-n-max 6"
+XTRA_ARGS=""
+[ -n "$FA" ] && XTRA_ARGS="--flash-attn $FA"
+[ -n "$KVQ" ] && XTRA_ARGS="$XTRA_ARGS --cache-type-k $KVQ --cache-type-v $KVQ"
 alias=$(basename "$m" .gguf)
 echo "main=$own rpc=$RPC model=$m ngl=$NGL par=$PAR yarn=${YARN}x port=$PORT"
 export LD_LIBRARY_PATH=$b
@@ -58,7 +80,7 @@ exec systemd-run --scope --collect -q \
   $CTX_ARGS \
   --batch-size 2048 --ubatch-size 1024 --threads "$THREADS" --threads-batch "$TB" \
   --cache-ram -1 \
-  $SPEC_ARGS --jinja \
+  $SPEC_ARGS $XTRA_ARGS --jinja \
   --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0.0 --repeat-penalty 1.0 \
   --no-mmproj --no-ui --no-agent --offline --timeout 43200 \
   --api-key-file "$d/key.secret" --log-file /data/ai/llama.log

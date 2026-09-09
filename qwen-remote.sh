@@ -3,18 +3,27 @@
 # Needs the tunnel running first:
 #   /data/local-ai/tunnel.sh   (serves 127.0.0.1:18081 + 10.253.254.1:18081)
 # Default remote: Ornith-1.5-397B Q8_0, 3-node RPC via remote/serve-rpc.sh
-#   (ctx below assumes the server's YARN=2 default = 524288/slot; native is 262144).
+#   (ctx below matches the server's YARN=1 default = native 262144/slot).
 # Legacy mode: REMOTE_MODEL=qwen38flash ./qwen-remote.sh
 #   (Qwen3.8-Flash-Next Q6 single node via remote/serve-new.sh).
 # NO short client caps: lifetime cap disabled (0), all other caps 12h (43200000 ms).
+# maxRetries 5000: the openai SDK retries connection errors/429/5xx with backoff
+# capped at ~8 s -> qwen keeps RETRYING for ~11 h instead of dying when the
+# tunnel/network drops BETWEEN requests. A drop MID-STREAM still fails the turn
+# (SDK cannot resume a broken stream) - qwen-super.sh catches that outer case.
+# COMPACT: chat-compression threshold (fraction of ctx window). Default 0.9 =
+# compact late (max fidelity). tg DECAYS with context depth (measured on Ornith:
+# 3.0 t/s @24K -> 1.34 t/s @53K), so for long unattended runs COMPACT=0.1-0.2
+# caps working context at ~26-52K and keeps generation in the 2.5-3 t/s band.
 d=$(dirname "$(realpath "$0")")
 h=/tmp/remote-ai-qwen-home
 mkdir -p "$h/.qwen"
 REMOTE_MODEL=${REMOTE_MODEL:-ornith15-397b}
+COMPACT=${COMPACT:-0.9}
 if [ "$REMOTE_MODEL" = "qwen38flash" ]; then
   MNAME="Qwen3.8-Flash-Next Q6 (remote CPU)"; MCTX=262144; MTEMP=1.0
 else
-  MNAME="Ornith-1.5-397B Q8_0 (remote 3-node CPU)"; MCTX=524288; MTEMP=0.6
+  MNAME="Ornith-1.5-397B Q8_0 (remote 3-node CPU)"; MCTX=262144; MTEMP=0.6
 fi
 cat > "$h/.qwen/settings.json" <<JSON
 {
@@ -25,7 +34,7 @@ cat > "$h/.qwen/settings.json" <<JSON
   "mcpServers": {},
   "tools": {"exclude": ["report_findings"]},
   "security": {"auth": {"selectedType": "openai"}},
-  "model": {"name": "$REMOTE_MODEL", "chatCompression": {"contextPercentageThreshold": 0.9}},
+  "model": {"name": "$REMOTE_MODEL", "chatCompression": {"contextPercentageThreshold": $COMPACT}},
   "fastModel": "$REMOTE_MODEL",
   "compactionModel": "$REMOTE_MODEL",
   "modelProviders": {"openai": [{
@@ -37,7 +46,7 @@ cat > "$h/.qwen/settings.json" <<JSON
       "contextWindowSize": $MCTX,
       "timeout": 43200000,
       "streamIdleTimeoutMs": 43200000,
-      "maxRetries": 1,
+      "maxRetries": 5000,
       "samplingParams": {"temperature": $MTEMP, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "max_tokens": 32768}
     }
   }]}

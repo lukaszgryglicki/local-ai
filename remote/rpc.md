@@ -105,6 +105,44 @@ node pages its ~150 GB of local layers into RAM). Expected steady speed for
 Ornith Q8_0: ~24 t/s prompt processing, ~4.5 t/s generation. Server allows 4
 parallel requests (slots).
 
+## Unattended / overnight runs — use qwen-super.sh (crash-proof)
+
+Lesson from 2026-09-08: a home↔Linode network flap killed qwen mid-task
+(ECONNREFUSED, client `maxRetries` was 1) and the stack idled 5.5 h. The
+tunnel self-healed (its retry loop works); the client did not. Fixes:
+
+- `qwen-remote.sh`: `maxRetries` now 8 — rides out blips of seconds.
+- `/data/local-ai/qwen-super.sh` — supervisor for anything longer: waits for
+  `/health` before every launch, relaunches qwen with a resume-from-workspace
+  prompt after ANY exit, and stops only when the task itself creates `DONE` in
+  the workspace (or MAX_TRIES=50). It appends crash-safety rules to every
+  prompt (persist in small increments, git commit constantly, short replies)
+  so a restart loses minutes, not hours — the 2026-09-08 run lost a 26K-token
+  design because the model kept it all in one 3 h reply.
+
+```sh
+daemon -o /dev/null /data/local-ai/qwen-super.sh \
+  ~/task/project ~/task/PROMPT.md ~/task/qwen.log        # FreeBSD host
+```
+
+Knobs: `MAX_TRIES DONE_FILE HEALTH_URL` (+ `REMOTE_MODEL COMPACT` pass through).
+
+## Generation speed vs context depth
+
+Measured on Ornith Q8_0 (2026-09-08): tg 3.0 t/s @24K ctx → 2.46 @27K → 1.34
+@53K (KV scan on the 15 full-attn layers; deep prefill also drops 26→8 t/s).
+The decay is physics (attention cost grows with depth), but its impact can be cut:
+
+- **client**: `COMPACT=0.05-0.10 qwen-remote.sh` — auto-compact (summarize) at
+  5–10% of the 524K window, capping working ctx at ~26–52K where tg is still
+  2.5–3 t/s. Costs a summary + small re-prefill (~10 min) every few hours ≈
+  ~2x effective overnight throughput. Keep the 0.9 default for interactive
+  work where fidelity matters more.
+- **server** (A/B untested, off by default): `FA=on KVQ=q8_0` — flash
+  attention + q8_0 KV cache ≈ halves KV memory traffic at depth, quality ~nil;
+  `THREADS=24` or `32` — llama.cpp PR #27754 field reports put the CPU-MoE
+  sweet spot at an absolute 24–32 threads (our default is 16).
+
 ## Idle cost of leaving the stack up (no clients)
 
 - **CPU ~0** (all processes are event-driven, block on sockets) and **disk growth 0**
@@ -138,6 +176,9 @@ Nothing persists between runs: no tensor caches are written (removed 2026-09-08
 
 ## Knobs (serve-rpc.sh)
 
-`MODEL PAR YARN NGL PORT RPC THREADS TB SPEC CTX NATIVE` — see the header of
-`serve-rpc.sh` for the full story (YaRN 1x/2x/4x context modes, POC mode with
-small models, and the GLM-5.3-Flash roadmap note).
+`MODEL PAR YARN NGL PORT RPC THREADS TB SPEC CTX NATIVE FA KVQ` — see the
+header of `serve-rpc.sh` for the full story (YaRN 1x/2x/4x context modes, the
+tg-decay mitigation knobs, POC mode with small models, and the GLM-5.3-Flash
+roadmap note — 2026-09-09 update: the long-ctx collapse bug in PR #27754 turned
+out Metal-only, CPU is clean; remaining agent-blocker is the branch's
+`supports_tool_calls=false`).

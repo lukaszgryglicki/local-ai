@@ -28,11 +28,17 @@ agent session costs ~0 (a few cents of electricity, 0 premium requests).
 | health.sh | yes | check server is up AND generates (auth round-trip) |
 | qwen.sh | yes | qwen-code agent against the local model (host) |
 | copilot.sh | yes | GitHub Copilot CLI + local model (run in the VM) |
+| tunnel.sh | yes | self-healing ssh tunnel to the remote 3-node model (retries forever) |
+| qwen-remote.sh | yes | qwen-code against the remote model via the tunnel (knobs: REMOTE_MODEL, COMPACT) |
+| qwen-super.sh | yes | crash-proof supervisor for unattended qwen-remote runs (health-gate + relaunch-until-DONE) |
+| health-remote.sh | yes | check the remote model through the tunnel |
+| tokenize.sh | yes | show how the remote model tokenizes the argument |
 | remote/ | yes | reference copies of the remote big-model server scripts: serve.sh, serve-new.sh (tuned, +MTP), serve-rpc.sh + start-rpc.sh (multi-node RPC, current production), rpc.md (step-by-step RPC runbook), qwen.sh, health.sh |
 | llama | yes | tiny launcher; libs load via RUNPATH from the POC build dir `/data/ai/local-agent-poc/src/llama.cpp/build-vulkan/bin` — keep that dir |
 | readme.md | yes | this file |
 | model.gguf | no (.gitignore) | Qwen3-Coder-30B-A3B-Instruct Q8_0, 30.25 GiB |
 | key.secret | no (.gitignore) | API key the server requires and clients send |
+| remote-host.secret, remote-key.secret | no (.gitignore) | remote main node ssh target + its API key |
 
 Server binary is a llama.cpp fork build (LLAMA_REF v0.4.0), Vulkan backend.
 
@@ -156,12 +162,31 @@ ngram-mod speculation, sampling per model card (temp 0.6 / top-p 0.95 /
 top-k 20). Historical single-node modes (serve.sh, serve-new.sh) stay
 available unchanged.
 
+**Generation speed decays with context depth** (measured 2026-09-08: tg
+3.0 t/s @24K → 1.34 @53K). Mitigations: client `COMPACT=0.05-0.10` (compact
+early, keeps tg in the fast band — ~2x effective overnight throughput) and
+untested server knobs `FA=on KVQ=q8_0`, `THREADS=24|32` — details in
+remote/rpc.md "Generation speed vs context depth".
+
+**Unattended runs must use qwen-super.sh** (2026-09-08 lesson: a home↔Linode
+network flap killed the raw qwen process mid-task; the tunnel self-healed but
+the client never came back). The supervisor health-gates every launch,
+relaunches with a resume prompt after any exit, injects crash-safety rules
+(persist small increments, commit often) and stops when the task touches
+DONE — see remote/rpc.md "Unattended / overnight runs".
+
 **NEXT MODEL (planned upgrade)**: **GLM-5.3-Flash Q8_0** (341 GB, TRUE 1M
 native context, 320B-A18B, reasoning-effort control) as soon as llama.cpp
-**PR #27754** (`glm5_next` arch, by Unsloth) merges to master — as of
-2026-09-08 the PR still has an unresolved long-context repeating-token
-collapse bug (65-253K depth, Metal+CUDA), so building the PR branch early
-was rejected; re-check the PR every week or two.
+**PR #27754** (`glm5_next` arch, by Unsloth) merges to master. Status
+2026-09-09 (checked via gh): still OPEN, but the long-context repeating-token
+collapse was root-caused to a **Metal-only** int32 overflow (`mul_mm.metal`
+batched dst offset past 2^31) — "CPU-only at the same failing depth is fine",
+so it does NOT block this all-CPU rig. Remaining agent-blocker: the branch
+serves `supports_tool_calls=false` (chat-template gap) — useless for qwen-code
+until fixed. Perf outlook vs Ornith at equal Q8: similar (A18B vs A17B); the
+real wins would be TRUE 1M ctx (no YaRN) and community-validated smaller
+quants (unsloth UD-IQ4_XS ~147 GB → fits ONE node, no RPC hops; reported
+several-x tg vs Q8 on CPU). Re-check the PR every week or two.
 
 ## ZFS: why the model has its own dataset
 
