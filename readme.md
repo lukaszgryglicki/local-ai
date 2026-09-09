@@ -164,8 +164,10 @@ top-k 20). Historical single-node modes (serve.sh, serve-new.sh) stay
 available unchanged.
 
 **Generation speed decays with context depth** (measured 2026-09-08: tg
-3.0 t/s @24K → 1.34 @53K). Mitigation: client `COMPACT=0.1-0.2` (compact
-early, keeps tg in the fast band — ~2x effective overnight throughput).
+3.0 t/s @24K → 1.34 @53K; extrapolates to ~0.4-0.5 t/s at the full 256K —
+no floor, tg ≈ 1/(a+b·depth)). **Policy: COMPACT stays ≥0.9** — compaction
+is lossy summarization and we choose full-context quality over speed; if
+depth-decay hurts too much the fix is a faster model/rig, not compaction.
 Server knobs `FA=on KVQ=q8_0` and `THREADS=24` were A/B/C-benched 2026-09-09
 and **lost to the defaults** (CPU flash-attn halves-to-thirds prefill; T24
 drops tg at most depths) — keep FA/KVQ off, THREADS=16; numbers in

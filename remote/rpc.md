@@ -145,11 +145,14 @@ Measured on Ornith Q8_0 (2026-09-08): tg 3.0 t/s @24K ctx → 2.46 @27K → 1.34
 @53K (KV scan on the 15 full-attn layers; deep prefill also drops 26→8 t/s).
 The decay is physics (attention cost grows with depth), but its impact can be cut:
 
-- **client**: `COMPACT=0.1-0.2 qwen-remote.sh` — auto-compact (summarize) at
-  10–20% of the 262K window, capping working ctx at ~26–52K where tg is still
-  2.5–3 t/s. Costs a summary + small re-prefill (~10 min) every few hours ≈
-  ~2x effective overnight throughput. Keep the 0.9 default for interactive
-  work where fidelity matters more.
+- **client**: `COMPACT` (auto-compact threshold) — **POLICY (owner,
+  2026-09-09): keep ≥0.9, never lower.** Compaction is LOSSY summarization
+  (older turns get replaced by a model-written summary — not compression), and
+  we prioritize full-context quality over tg; the depth decay is an accepted
+  cost. Extrapolated decay: ~0.9 t/s @100K, ~0.4–0.5 t/s @256K (tg ≈
+  1/(a+b·depth), no floor). If that gets too slow, the answer is a faster
+  model/rig (GLM PR, single-node small-quant, laptop GPU hybrid), not
+  aggressive compaction.
 - **server** (A/B/C benched 2026-09-09 — **defaults won, keep OFF**): 128-tok
   gen at 16K/32K/49K depth, loopback on the main node:
   | config | pp t/s (16/32/49K) | tg t/s (16/32/49K) |

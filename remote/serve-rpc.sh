@@ -24,8 +24,8 @@
 # dequant costs far exceed the smaller-KV win; T24 only helps a narrow mid-depth
 # band. Knobs kept for future re-testing (new llama.cpp versions / models):
 #   FA=on KVQ=q8_0 THREADS=24|32
-# Client-side lever: COMPACT=0.05-0.10 in qwen-remote.sh caps working ctx where
-# tg is still 2.5-3 t/s.
+# Client-side COMPACT policy (owner): keep >=0.9 - full-context quality beats
+# tg; compaction is lossy summarization, never set it aggressive (0.1-0.2).
 #
 # NEXT MODEL: GLM-5.3-Flash Q8_0 (320.76B MoE A18B, TRUE 1M native ctx, effort
 #   control) once llama.cpp PR #27754 (glm5_next) merges. Status 2026-09-09:

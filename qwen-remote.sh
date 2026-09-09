@@ -12,9 +12,9 @@
 # tunnel/network drops BETWEEN requests. A drop MID-STREAM still fails the turn
 # (SDK cannot resume a broken stream) - qwen-super.sh catches that outer case.
 # COMPACT: chat-compression threshold (fraction of ctx window). Default 0.9 =
-# compact late (max fidelity). tg DECAYS with context depth (measured on Ornith:
-# 3.0 t/s @24K -> 1.34 t/s @53K), so for long unattended runs COMPACT=0.1-0.2
-# caps working context at ~26-52K and keeps generation in the 2.5-3 t/s band.
+# compact late (max fidelity). POLICY (owner, 2026-09-09): never set below 0.9
+# - we want the full model context and maximum quality; tg decay at depth is an
+# accepted cost (compaction is LOSSY summarization, not compression). 0.95 ok.
 d=$(dirname "$(realpath "$0")")
 h=/tmp/remote-ai-qwen-home
 mkdir -p "$h/.qwen"
