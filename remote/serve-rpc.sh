@@ -15,13 +15,15 @@
 #   jailed like serve-new.sh: MemoryHigh 190G / Max 200G, cores 0-43, nice 5
 #
 # tg DECAYS with context depth (measured 2026-09-08: 3.0 t/s @24K -> 1.34 @53K;
-# KV scan on the 15 full-attn layers). Optional mitigations, OFF by default, to
-# A/B on the next run (defaults keep the proven f16/no-FA config):
-#   FA=on       flash attention (also prerequisite for quantized V cache)
-#   KVQ=q8_0    quantize KV cache K+V -> ~halves KV memory traffic at depth,
-#               quality impact ~nil; V-quant needs FA=on
-#   THREADS=24|32  llama.cpp PR#27754 field reports: absolute 24-32 threads is
-#               the CPU-MoE tg sweet spot (we default 16 - worth an A/B)
+# KV scan on the 15 full-attn layers). A/B/C BENCHED 2026-09-09 (128-tok gen at
+# 2K/16K/32K/49K depth, /v1/chat/completions timings, tdb01 loopback):
+#   A = defaults (T16, no FA, f16 KV):  pp 27.6/22.1/18.6  tg 3.33/2.20/2.29 (16/32/49K)
+#   B = FA=on KVQ=q8_0:                 pp 18.1/11.4/7.9   tg 3.13/2.21/1.83  <- pp COLLAPSES
+#   C = THREADS=24:                     pp 26.9/21.8/18.0  tg 2.70/2.78/1.81  <- tg loses 2of3
+# VERDICT: defaults win -> keep FA/KVQ OFF, THREADS=16. CPU flash-attn + KV
+# dequant costs far exceed the smaller-KV win; T24 only helps a narrow mid-depth
+# band. Knobs kept for future re-testing (new llama.cpp versions / models):
+#   FA=on KVQ=q8_0 THREADS=24|32
 # Client-side lever: COMPACT=0.05-0.10 in qwen-remote.sh caps working ctx where
 # tg is still 2.5-3 t/s.
 #
@@ -53,7 +55,12 @@ own=$(ip -4 -o a show dev eth0 | grep -o "10\.60\.0\.[0-9]*" | head -1)
 if [ -z "$RPC" ]; then
   for ip in 10.60.0.21 10.60.0.22 10.60.0.32; do
     [ "$ip" = "$own" ] && continue
-    timeout 1 bash -c "echo > /dev/tcp/$ip/50052" 2>/dev/null && RPC="${RPC:+$RPC,}$ip:50052"
+    # 3s + one retry: helpers briefly stall the accept loop while freeing ~150G
+    # after the previous main exits (1s probe false-negatived on 2026-09-09)
+    for try in 1 2; do
+      timeout 3 bash -c "echo > /dev/tcp/$ip/50052" 2>/dev/null && { RPC="${RPC:+$RPC,}$ip:50052"; break; }
+      sleep 2
+    done
   done
 fi
 [ -z "$RPC" ] && { echo "no RPC backends reachable on :50052 (run start-rpc.sh on helpers)"; exit 1; }

@@ -27,6 +27,15 @@ toks = post("/tokenize", {"content": text})["tokens"]
 assert len(toks) > max(DEPTHS), "filler too small: %d" % len(toks)
 sys.stderr.write("filler tokenized: %d tokens\n" % len(toks))
 
+# warmup: first inference after a fresh load pays expert page-in (mmap) and
+# would contaminate the first row (seen 2026-09-09: cold 2K row pp 7.9 vs
+# warm 20.5). One short throwaway generation heats the active experts.
+post("/v1/chat/completions", {
+    "model": "bench", "stream": False, "max_tokens": 32, "temperature": 0.0,
+    "ignore_eos": True,
+    "messages": [{"role": "user", "content": "Warmup. Count to ten."}]})
+sys.stderr.write("warmup done\n")
+
 for depth in DEPTHS:
     prefix = post("/detokenize", {"tokens": toks[: depth - 60]})["content"]
     body = {

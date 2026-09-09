@@ -164,9 +164,11 @@ top-k 20). Historical single-node modes (serve.sh, serve-new.sh) stay
 available unchanged.
 
 **Generation speed decays with context depth** (measured 2026-09-08: tg
-3.0 t/s @24K → 1.34 @53K). Mitigations: client `COMPACT=0.1-0.2` (compact
-early, keeps tg in the fast band — ~2x effective overnight throughput) and
-untested server knobs `FA=on KVQ=q8_0`, `THREADS=24|32` — details in
+3.0 t/s @24K → 1.34 @53K). Mitigation: client `COMPACT=0.1-0.2` (compact
+early, keeps tg in the fast band — ~2x effective overnight throughput).
+Server knobs `FA=on KVQ=q8_0` and `THREADS=24` were A/B/C-benched 2026-09-09
+and **lost to the defaults** (CPU flash-attn halves-to-thirds prefill; T24
+drops tg at most depths) — keep FA/KVQ off, THREADS=16; numbers in
 remote/rpc.md "Generation speed vs context depth".
 
 **Unattended runs must use qwen-super.sh** (2026-09-08 lesson: a home↔Linode

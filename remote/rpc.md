@@ -150,10 +150,19 @@ The decay is physics (attention cost grows with depth), but its impact can be cu
   2.5–3 t/s. Costs a summary + small re-prefill (~10 min) every few hours ≈
   ~2x effective overnight throughput. Keep the 0.9 default for interactive
   work where fidelity matters more.
-- **server** (A/B untested, off by default): `FA=on KVQ=q8_0` — flash
-  attention + q8_0 KV cache ≈ halves KV memory traffic at depth, quality ~nil;
-  `THREADS=24` or `32` — llama.cpp PR #27754 field reports put the CPU-MoE
-  sweet spot at an absolute 24–32 threads (our default is 16).
+- **server** (A/B/C benched 2026-09-09 — **defaults won, keep OFF**): 128-tok
+  gen at 16K/32K/49K depth, loopback on the main node:
+  | config | pp t/s (16/32/49K) | tg t/s (16/32/49K) |
+  |---|---|---|
+  | A defaults (T16, no FA, f16 KV) | **27.6 / 22.1 / 18.6** | **3.33 / 2.20 / 2.29** |
+  | B `FA=on KVQ=q8_0` | 18.1 / 11.4 / 7.9 | 3.13 / 2.21 / 1.83 |
+  | C `THREADS=24` | 26.9 / 21.8 / 18.0 | 2.70 / 2.78 / 1.81 |
+  CPU flash-attn collapses prefill (2–2.6x slower) and the q8_0-KV dequant
+  eats the smaller-KV win; T24 helps only a narrow mid-depth band and loses
+  elsewhere (tg is RAM-bandwidth-bound). Knobs remain for re-testing on new
+  llama.cpp versions/models. Bench harness: `remote/bench-ab.py` (runs on the
+  main node; note: first request after a fresh load pays expert page-in — warm
+  the server or discard the first row).
 
 ## Idle cost of leaving the stack up (no clients)
 
