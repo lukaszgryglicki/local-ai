@@ -146,13 +146,15 @@ Measured on Ornith Q8_0 (2026-09-08): tg 3.0 t/s @24K ctx → 2.46 @27K → 1.34
 The decay is physics (attention cost grows with depth), but its impact can be cut:
 
 - **client**: `COMPACT` (auto-compact threshold) — **POLICY (owner,
-  2026-09-09): keep ≥0.9, never lower.** Compaction is LOSSY summarization
-  (older turns get replaced by a model-written summary — not compression), and
-  we prioritize full-context quality over tg; the depth decay is an accepted
-  cost. Extrapolated decay: ~0.9 t/s @100K, ~0.4–0.5 t/s @256K (tg ≈
-  1/(a+b·depth), no floor). If that gets too slow, the answer is a faster
-  model/rig (GLM PR, single-node small-quant, laptop GPU hybrid), not
-  aggressive compaction.
+  2026-09-09): default 0.9 (0.95 fine); optional speed setting allowed but
+  never below 0.5.** Compaction is LOSSY summarization (older turns get
+  replaced by a model-written summary — not compression), and we prioritize
+  full-context quality; the depth decay is an accepted cost. Extrapolated
+  decay: ~0.9 t/s @100K, ~0.4–0.5 t/s @256K (tg ≈ 1/(a+b·depth), no floor).
+  `COMPACT=0.5` caps working ctx at ~131K (~0.7-0.8 t/s worst case) as the
+  most aggressive sanctioned trade; if that is still too slow, the answer is
+  a faster model/rig (GLM PR, single-node small-quant, laptop GPU hybrid),
+  not deeper compaction.
 - **server** (A/B/C benched 2026-09-09 — **defaults won, keep OFF**): 128-tok
   gen at 16K/32K/49K depth, loopback on the main node:
   | config | pp t/s (16/32/49K) | tg t/s (16/32/49K) |
