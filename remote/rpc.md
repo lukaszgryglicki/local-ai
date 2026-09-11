@@ -139,10 +139,41 @@ daemon -o /dev/null /data/local-ai/qwen-super.sh \
 
 Knobs: `MAX_TRIES DONE_FILE HEALTH_URL` (+ `REMOTE_MODEL COMPACT` pass through).
 
+**Proof it works (2026-09-10): a real ISP outage 14:13→15:00 UTC hit a live
+47 h run and it survived autonomously, zero work lost.** Mechanics observed:
+the tunnel loop churned every ~2.5 min (ServerAlive 30×4 → ~120 s dead-peer
+detection, then 5 s sleep and reconnect — connections die instantly when the
+ISP is down, so the loop just spins cheaply); qwen's in-flight fetch HUNG
+(node fetch has no response timeout) until its dying ssh channel sent a
+socket RST, which bounced the request into the SDK retry layer (layer 1) —
+when the ISP returned, the next retry succeeded and the turn continued.
+Supervisor stayed at attempt 1/50 the whole time. Optional hardening if
+faster mid-stream recovery matters: `ServerAliveInterval=10 CountMax=2`
+(~20 s detection → quicker RST → shorter client hangs) at the cost of more
+tunnel churn on flaky-but-alive links.
+
+**Plan for "mega-turns": single model turns of 10.9K and 12.1K output tokens
+(~5–6 h each at deep-ctx speeds) were observed writing whole modules.** No
+output for hours is NORMAL — check the server log (`n_gen` climbing) before
+assuming a hang. The crash-safety prompt makes the model commit only at
+green-test milestones; a mega-turn's file writes land mid-turn, so the
+workspace can be hours newer than the last commit.
+
 ## Generation speed vs context depth
 
 Measured on Ornith Q8_0 (2026-09-08): tg 3.0 t/s @24K ctx → 2.46 @27K → 1.34
 @53K (KV scan on the 15 full-attn layers; deep prefill also drops 26→8 t/s).
+
+**Real long-run curve (2026-09-11, 46+ h continuous agent run, YARN=1, 262K
+ctx, measured via `/slots` + server log):** tg 1.6 @33K → 0.73 @110K → 0.72
+@146K → 0.62 @~160K → 0.55 @179K → ~0.50 @185K. pp on deep prefills 3.5–9 t/s.
+Short tool-call turns bounce 0.37–0.67 (KV locality). The earlier
+extrapolation held: expect ~0.4–0.5 t/s approaching 256K. Context grows
+~2.4–3.3K tok/h in a test/fix coding loop, so a 262K window lasts multiple
+DAYS of unattended work before qwen's 0.95 auto-compact fires (~249K).
+Measure real usage via `/slots` (`n_prompt_tokens`); the task-id proxy in the
+log underestimates badly because tool results re-enter the prompt.
+
 The decay is physics (attention cost grows with depth), but its impact can be cut:
 
 - **client**: `COMPACT` (auto-compact threshold) — **POLICY (owner,
