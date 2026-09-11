@@ -120,7 +120,9 @@ layers now (inner → outer):
    relaunches with **real session resume** (`qwen -c`, same as
    `claude/copilot --resume`): chat recording is on by default
    (`general.chatRecording`), sessions live under the qwen HOME
-   (`/tmp/remote-ai-qwen-home/.qwen/projects/<cwd>/chats/*.jsonl`), so the
+   (`/data/ai/qwen-remote-home/.qwen/projects/<cwd>/chats/*.jsonl` — persistent
+   on purpose: it lived in /tmp until the 2026-09-11 host reboot wiped it and
+   killed the `-c` resume; never put resume-state on tmpfs), so the
    model gets its full prior conversation back. The supervisor also
    health-gates every launch on `/health` and stops only when the task itself
    creates `DONE` in the workspace (or MAX_TRIES=50).

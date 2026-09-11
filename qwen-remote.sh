@@ -17,7 +17,9 @@
 # summarization, not compression. Optional speed tweak allowed but NEVER below
 # 0.5 (tg decays with depth: ~3 t/s @24K -> ~1.4 @53K -> ~0.4-0.5 @256K).
 d=$(dirname "$(realpath "$0")")
-h=/tmp/remote-ai-qwen-home
+# NOT /tmp: tmpfs is wiped on host reboot and the recorded chat sessions
+# (crash-resume source) must survive (lesson: 2026-09-11 reboot lost one).
+h=/data/ai/qwen-remote-home
 mkdir -p "$h/.qwen"
 REMOTE_MODEL=${REMOTE_MODEL:-ornith15-397b}
 COMPACT=${COMPACT:-0.9}

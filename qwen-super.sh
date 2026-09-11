@@ -30,7 +30,7 @@ ws=$1; pf=$2
 ws=$(realpath "$ws"); pf=$(realpath "$pf")
 log=${3:-$ws/qwen.log}
 d=$(dirname "$(realpath "$0")")
-qhome=/tmp/remote-ai-qwen-home   # must match h= in qwen-remote.sh
+qhome=/data/ai/qwen-remote-home   # must match h= in qwen-remote.sh (persistent, NOT /tmp)
 DONE_FILE=${DONE_FILE:-$ws/DONE}
 HEALTH_URL=${HEALTH_URL:-http://127.0.0.1:18081/health}
 MAX_TRIES=${MAX_TRIES:-50}
