@@ -5,6 +5,7 @@
 # ../qwen.sh: throwaway HOME so the real qwen config is untouched, report_findings excluded (its JSON
 # schema breaks this llama build's grammar converter -> HTTP 400), no short client caps (lifetime cap
 # 0, others 12h). max_tokens 32768: thinking + code in one turn; North allows 64K output.
+# context.autoCompactThreshold 0.95: auto-compaction only at 95% of the 256K window (qwen default 0.85).
 # Headless: MODEL=north asgard/qwen.sh --yolo -o stream-json "prompt"   (see asgard/rust-test.sh)
 d=$(dirname "$(realpath "$0")")
 . "$d/models.sh"; model_env "${MODEL:-north}" || exit 1
@@ -18,6 +19,7 @@ cat > "$h/.qwen/settings.json" <<EOF
   "telemetry": {"enabled": false, "logPrompts": false},
   "mcpServers": {},
   "tools": {"exclude": ["report_findings"]},
+  "context": {"autoCompactThreshold": 0.95},
   "security": {"auth": {"selectedType": "openai"}},
   "model": {"name": "$MODEL_ALIAS"},
   "fastModel": "$MODEL_ALIAS",

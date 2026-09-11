@@ -4,13 +4,15 @@
 # then verify the result independently (fresh cargo build/test, stdin round-trips vs Python's s[::-1])
 # and pull server-side speed numbers (pp/tg per request, draft acceptance) from the llama log slice
 # written during the run. MODEL must match asgard/serve.sh's model.
-# Output: /var/tmp/local-ai-rusttest-MODEL/{qwen.log,summary.txt,revstr/}; summary also on stdout.
+# Output (preserved): /data/ai/rust-task-MODEL/{qwen.log,health.txt,summary.txt,revstr/}; a previous run is
+# kept as /data/ai/rust-task-MODEL.prev-<timestamp>. Summary also on stdout.
 d=$(dirname "$(realpath "$0")")
 M=${1:-north}
-W=/var/tmp/local-ai-rusttest-$M
+W=/data/ai/rust-task-$M
 LOG=${LOG:-/var/tmp/local-ai-llama.log}
 PROMPT='Create a Rust cargo project named revstr in the current directory (write Cargo.toml and src/main.rs yourself or use cargo new). Implement pub fn reverse(s: &str) -> String that reverses a string by Unicode scalar values (chars), not bytes, and a main() that reads all of stdin, strips one trailing newline, and prints the reversed string followed by a newline. Add unit tests for: the empty string, "hello" -> "olleh", the Polish string "Zażółć gęślą jaźń", and an emoji string. No external crates. Run `cargo build --release` and `cargo test` and fix any errors until both pass. Finish by printing the final src/main.rs.'
-rm -rf "$W"; mkdir -p "$W"; cd "$W" || exit 1
+[ -d "$W" ] && mv "$W" "$W.prev-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$W"; cd "$W" || exit 1
 "$d/health.sh" > health.txt 2>&1 || { cat health.txt; echo "server not healthy - aborting"; exit 1; }
 off=$(stat -f %z "$LOG" 2>/dev/null || echo 0)
 t0=$(date +%s)
