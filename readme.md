@@ -36,7 +36,7 @@ agent session costs ~0 (a few cents of electricity, 0 premium requests).
 | remote/ | yes | reference copies of the remote big-model server scripts: serve.sh, serve-new.sh (tuned, +MTP), serve-rpc.sh + start-rpc.sh (multi-node RPC, current production), rpc.md (step-by-step RPC runbook), qwen.sh, health.sh |
 | llama | yes | tiny launcher; libs load via RUNPATH from the POC build dir `/data/ai/local-agent-poc/src/llama.cpp/build-vulkan/bin` — keep that dir |
 | readme.md | yes | this file |
-| asgard/ | yes | **second box** (Dell Precision 7750: Xeon W-10885M, Quadro RTX 5000 16 GiB, 128 GiB DDR4, FreeBSD 15.1-STABLE): `asgard/plan.md` = hardware budget, tiered model shortlist (T-1/T0/T1/T2), configs, native Vulkan build incl. the clang-21 trap, test protocol, status; `asgard/research/*.md` = the raw research reports behind it (+ the `test-backend-ops` excerpt), `asgard/vkalloc.c` = the pinned-cap probe |
+| asgard/ | yes | **second box** (Dell Precision 7750: Xeon W-10885M, Quadro RTX 5000 16 GiB, 128 GiB DDR4, FreeBSD 15.1-STABLE): `asgard/plan.md` = hardware budget, tiered model shortlist (T-1/T0/T1/T2), configs, native Vulkan build incl. the clang-21 trap, test protocol, status; `asgard/research/*.md` = the raw research reports behind it (+ the `test-backend-ops` excerpt), `asgard/vkalloc.c` = the pinned-cap probe; **asgard variants of the scripts** (like local / remote / rpc before): `asgard/models.sh` (per-model file, HF rev, sha256, spec-type, cache-ram, sampling, thinking toggle), `asgard/serve.sh MODEL`, `asgard/download.sh MODEL`, `asgard/health.sh`, `asgard/qwen.sh` (`MODEL=…`), `asgard/bench.py`, `asgard/rust-test.sh MODEL` (the full test: qwen-code writes+tests a Rust string reverser, verified independently); `asgard/status-2026-09-11.md` = end-of-groundwork report, `asgard/results-t1.md` = T-1 download/test log |
 | model.gguf | no (.gitignore) | Qwen3-Coder-30B-A3B-Instruct Q8_0, 30.25 GiB |
 | key.secret | no (.gitignore) | API key the server requires and clients send |
 | remote-host.secret, remote-key.secret | no (.gitignore) | remote main node ssh target + its API key |
@@ -288,10 +288,20 @@ GELI). Same repo checked out at `/data/local-ai`; same POC tree at
 Status: llama.cpp v0.4.0 built natively with Vulkan, Quadro visible as
 `Vulkan0` with NV_coopmat2, `test-backend-ops` gate: 0 FAIL over every op
 (the full run only aborts at one synthetic 768 MiB upload — the driver cap
-below, not a kernel bug) — **no model downloaded yet** (gated). Everything
-else, incl. the ranked shortlist (T-1 North-Mini-Code / Qwen3.5-9B, T0
-Qwen3.6-35B-A3B, T0b KAT-Coder, T1, T2 Qwen3.8-Flash-Next), is in
-`asgard/plan.md`.
+below, not a kernel bug). Models: `/data/local-ai/models/*.gguf` (gitignored,
+on the dataset), fetched one at a time with `asgard/download.sh MODEL` and
+each put through the full test before the next download — see
+`asgard/results-t1.md`. Everything else, incl. the ranked shortlist (T-1
+North-Mini-Code / Qwen3.5-9B / Gemma-4-26B-A4B, T0 Qwen3.6-35B-A3B, T0b
+KAT-Coder, T1, T2 Qwen3.8-Flash-Next), is in `asgard/plan.md`; the
+end-of-groundwork report is `asgard/status-2026-09-11.md`.
+
+Serving on asgard: `asgard/serve.sh north` (or `qwen9b` / `gemma` /
+`qwen35b`; `NP=` slots, `THREADS=`, `NCMOE=` overrides) — same
+`10.253.254.1:18080` + alias `qwen3coder-local` as tuxi, so the top-level
+`qwen.sh`/`health.sh`/`copilot.sh` also work there; `MODEL=north
+asgard/qwen.sh` adds the model's own sampling. All weights + 256K q8_0 KV in
+Quadro VRAM (`--gpu-layers 99 --device Vulkan0`, X on the iGPU).
 
 Rules learned on asgard:
 
