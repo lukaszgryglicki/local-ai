@@ -200,9 +200,11 @@ manually after ~55.6 h wall (too slow to continue, not a failure).
      must span reboots, add rc.d services for tunnel + supervisor.
 - **Teardown (09-11 18:2xZ):** all procs killed by PID (llama-server, both
   ggml-rpc-servers, qwen, supervisor, POC tunnel), logs removed (llama.log,
-  serve.out, rpc.log, bench logs); model, binaries, scripts, /data/ai dirs
-  left intact on all nodes; root disks back at 5/6/7% baseline; tdb01 RAM
-  41G used (was ~208G).
+  serve.out, rpc.log, bench logs); **model GGUFs deleted** (Ornith 400G on T1,
+  Qwen3.8-Flash 158G+2.5G on T2 — /data/ai now 70M/474M/340M); binaries,
+  scripts and /data/ai dirs left in place; root disks back at 5/6/7% baseline;
+  tdb01 RAM 41G used (was ~208G). Final state confirmed with DevStats
+  `devel/mega_health_check.sh` from the FreeBSD host.
 
 ## Generation speed vs context depth
 
