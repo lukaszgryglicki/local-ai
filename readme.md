@@ -36,6 +36,7 @@ agent session costs ~0 (a few cents of electricity, 0 premium requests).
 | remote/ | yes | reference copies of the remote big-model server scripts: serve.sh, serve-new.sh (tuned, +MTP), serve-rpc.sh + start-rpc.sh (multi-node RPC, current production), rpc.md (step-by-step RPC runbook), qwen.sh, health.sh |
 | llama | yes | tiny launcher; libs load via RUNPATH from the POC build dir `/data/ai/local-agent-poc/src/llama.cpp/build-vulkan/bin` — keep that dir |
 | readme.md | yes | this file |
+| asgard/ | yes | **second box** (Dell Precision 7750: Xeon W-10885M, Quadro RTX 5000 16 GiB, 128 GiB DDR4, FreeBSD 15.1-STABLE): `asgard/plan.md` = hardware budget, tiered model shortlist (T-1/T0/T1/T2), configs, native Vulkan build incl. the clang-21 trap, test protocol, status; `asgard/research/*.md` = the raw research reports behind it (+ the `test-backend-ops` excerpt), `asgard/vkalloc.c` = the pinned-cap probe |
 | model.gguf | no (.gitignore) | Qwen3-Coder-30B-A3B-Instruct Q8_0, 30.25 GiB |
 | key.secret | no (.gitignore) | API key the server requires and clients send |
 | remote-host.secret, remote-key.secret | no (.gitignore) | remote main node ssh target + its API key |
@@ -276,3 +277,52 @@ Rules learned the hard way:
   Test config changes against the real server only.
 - Server-side DeviceLost (e.g. ub2048 experiment) does not hang the host —
   it just kills the server; safe to retry with fixed settings.
+
+## asgard (second box, 2026-09-11) — see asgard/plan.md
+
+Dell Precision 7750 (Xeon W-10885M 8C/16T, **Quadro RTX 5000 16 GiB** on
+nvidia 595 + Intel P630 iGPU for X, 128 GiB DDR4-2933, 4-way NVMe mirror,
+GELI). Same repo checked out at `/data/local-ai`; same POC tree at
+`/data/ai/local-agent-poc`; `zroot/data/local-ai` dataset with the same
+`compression=off primarycache=metadata` recipe (`/data/ai` is a plain dir).
+Status: llama.cpp v0.4.0 built natively with Vulkan, Quadro visible as
+`Vulkan0` with NV_coopmat2, `test-backend-ops` gate: 0 FAIL over every op
+(the full run only aborts at one synthetic 768 MiB upload — the driver cap
+below, not a kernel bug) — **no model downloaded yet** (gated). Everything
+else, incl. the ranked shortlist (T-1 North-Mini-Code / Qwen3.5-9B, T0
+Qwen3.6-35B-A3B, T0b KAT-Coder, T1, T2 Qwen3.8-Flash-Next), is in
+`asgard/plan.md`.
+
+Rules learned on asgard:
+
+- **FreeBSD nvidia 595 Vulkan pinned-memory cap**: one host-visible
+  allocation must be < 256 MiB (`VK_ERROR_OUT_OF_DEVICE_MEMORY` at exactly
+  256 MiB; total pinned and device-local are unlimited — probe:
+  `asgard/vkalloc.c`). ggml-vulkan stages every `tensor_set/get` through one
+  buffer of the copy's size, so: **always `--load-mode none`** (the default
+  mmap path uploads whole tensors — `output.weight` of a 9B Q8_0 is 1 GiB),
+  never `--check-tensors`, never `GGML_VK_PREFER_HOST_MEMORY`, and
+  `--cache-ram 0` for models whose K or V per layer exceeds 255 MiB at the
+  context size (Qwen3.5-9B, Gemma 4 at 262K; MoE 35B/North are fine).
+  Details and the arithmetic: `asgard/plan.md` §6.
+- **`--spec-type draft-mtp` only with `*-MTP-GGUF` files**: on a model
+  without MTP layers llama-server exits at start (`failed to create MTP
+  context`); use `ngram-mod` alone for North-Mini-Code / KAT-Coder / Gemma 4.
+- **clang 21 trap**: 15.1-STABLE ships clang 21.1.8, which needs > 40 min
+  (killed at 42) for `ggml/src/ggml-vulkan/ggml-vulkan.cpp` at `-O3`
+  (register allocation blows up on `ggml_vk_load_shaders`); tuxi's clang
+  19.1.7 does it in 127 s. Fix in the POC: `bin/cxx-launcher.sh`
+  (`CMAKE_CXX_COMPILER_LAUNCHER`, auto-enabled by `bin/01b-build-vulkan.sh`
+  when `cc -dumpversion` ≥ 21) rewrites `-O3`→`-O2` for that one TU (151 s);
+  it is host-side Vulkan glue, inference speed is unaffected. Decision: keep
+  base clang 21, do **not** install `llvm19`.
+- Do not sync `build-vulkan/` or `build-cpu/` between the laptops:
+  `-march=native` binaries from tuxi (Zen 4) SIGILL on asgard (Comet Lake,
+  no AVX-512 either way but different ISA extensions) — rebuild in place.
+- Turbo is disabled in asgard's BIOS → 2.4 GHz cap; with the default
+  `hwpstate_intel` epp=100 cores sit at ~1.5 GHz under load. For builds and
+  CPU-offload grids use `sysctl dev.hwpstate_intel.{0..15}.epp=0` (runtime
+  only) and restore 100 afterwards.
+- Never `zzz` with a model mmap-loaded from the `primarycache=metadata`
+  dataset (cold re-read on resume); asgard has GELI, so a GPU hang means a
+  passphrase at the console — never run GPU `llama-bench` there either.

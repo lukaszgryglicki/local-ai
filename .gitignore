@@ -3,3 +3,5 @@
 *.secret
 *.swp
 __pycache__/
+models/
+*.part

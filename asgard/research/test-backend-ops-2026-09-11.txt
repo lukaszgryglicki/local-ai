@@ -1,0 +1,55 @@
+# test-backend-ops -b Vulkan0 on asgard — 2026-09-11 (llama.cpp POC fork v0.4.0 5266f24, clang 21.1.8, nvidia 595.99.02)
+# Compact excerpt of the five runs; full ANSI logs were in /var/tmp/tbo-*.log (deleted). See plan.md §6/§7.
+
+== run 1: unrestricted (aborted) — /var/tmp/test-backend-ops.log
+ggml_vulkan: 0 = Quadro RTX 5000 (NVIDIA) | uma: 0 | fp16: 1 | bf16: 1 | fp4: 0 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: NV_coopmat2
+Testing 2 devices
+Backend 1/2: Vulkan0
+  Device description: Quadro RTX 5000
+  Device memory: 16630 MB (16331 MB free)
+  SNAKE_FUSE(type=bf16,ne=[5,7,1,1]): not supported [Vulkan0, Vulkan0, Vulkan0, Vulkan0, Vulkan0] 
+  SNAKE_FUSE(type=bf16,ne=[33,32,1,1]): not supported [Vulkan0, Vulkan0, Vulkan0, Vulkan0, Vulkan0] 
+  SNAKE_FUSE(type=bf16,ne=[1025,13,1,1]): not supported [Vulkan0, Vulkan0, Vulkan0, Vulkan0, Vulkan0] 
+  SNAKE_FUSE(type=bf16,ne=[128,16,1,1]): not supported [Vulkan0, Vulkan0, Vulkan0, Vulkan0, Vulkan0] 
+  SNAKE_FUSE(type=bf16,ne=[256,192,1,1]): not supported [Vulkan0, Vulkan0, Vulkan0, Vulkan0, Vulkan0] 
+  SNAKE_FUSE(type=bf16,ne=[64,32,2,1]): not supported [Vulkan0, Vulkan0, Vulkan0, Vulkan0, Vulkan0] 
+  SNAKE_FUSE(type=bf16,ne=[64,32,1,2]): not supported [Vulkan0, Vulkan0, Vulkan0, Vulkan0, Vulkan0] 
+...; OK lines: 9054, FAIL: 0, not supported: 2523
+    frame #1: 0x000000082327e95c libthr.so.3`___lldb_unnamed_symbol_1c920 + 60
+    frame #2: 0x0000000829997ab9 libggml-base.so.0`ggml_uncaught_exception() + 9
+    frame #3: 0x000000082b670179 libcxxrt.so.1`std::terminate() + 41
+    frame #4: 0x000000082b670664 libcxxrt.so.1`___lldb_unnamed_symbol_e580 + 228
+    frame #5: 0x000000082b670579 libcxxrt.so.1`__cxa_throw + 57
+    frame #6: 0x000000082899f29e libggml-vulkan.so.0`ggml_vk_create_buffer_check(std::__1::shared_ptr<vk_device_struct>&, unsigned long, vk::Flags<vk::MemoryPropertyFlagBits>, vk::Flags<vk::MemoryProp
+    frame #7: 0x000000082899ef75 libggml-vulkan.so.0`ggml_vk_ensure_sync_staging_buffer(std::__1::shared_ptr<vk_device_struct>&, unsigned long) + 261
+    frame #8: 0x000000082899e8e7 libggml-vulkan.so.0`ggml_vk_buffer_write_2d_async(std::__1::shared_ptr<vk_context_struct>, std::__1::shared_ptr<vk_buffer_struct>&, unsigned long, void const*, unsigne
+--
+    frame #17: 0x0000000000230bf4 test-backend-ops`_start at crt1_s.S:80
+(lldb) quit
+Terminating due to uncaught exception 0x6dcca1777c0 'vk::Device::allocateMemory: ErrorOutOfDeviceMemory' of type vk::SystemError
+Abort trap
+TBO_RC=134 19:19:55
+
+== run 2: -o MUL_MAT_ID — /var/tmp/tbo-mmid.log
+  883/883 tests passed
+  Backend Vulkan0: OK
+TBO_RC=0 19:24:43
+== run 3: -o <111 ops from support mode> — /var/tmp/tbo-rest.log
+TBO_RC=1 19:33:29
+TBO_RC=0 19:52:51
+  16214/16214 tests passed
+  Backend Vulkan0: OK
+== run 4: fused/whole-graph ops — /var/tmp/tbo-fused.log
+TBO_START 19:53:56
+TBO_RC=0 19:54:43
+  2153/2153 tests passed
+  Backend Vulkan0: OK
+== run 5: -o MUL_MAT_ID_FUSION -p quantized — /var/tmp/tbo-mmidf-q.log
+  MUL_MAT_ID_FUSION(type_a=q4_0,type_b=f32,n_mats=128,n_used=8,b=0,m=768,n=1,k=2048,o=1,mul=1): OK
+  MUL_MAT_ID_FUSION(type_a=q4_K,type_b=f32,n_mats=128,n_used=8,b=0,m=768,n=1,k=2048,o=1,mul=1): OK
+  MUL_MAT_ID_FUSION(type_a=q4_0,type_b=f32,n_mats=128,n_used=8,b=0,m=768,n=4,k=2048,o=1,mul=1): OK
+  MUL_MAT_ID_FUSION(type_a=q4_K,type_b=f32,n_mats=128,n_used=8,b=0,m=768,n=4,k=2048,o=1,mul=1): OK
+  MUL_MAT_ID_FUSION(type_a=q4_0,type_b=f32,n_mats=128,n_used=8,b=0,m=768,n=512,k=2048,o=1,mul=1): OK
+  MUL_MAT_ID_FUSION(type_a=q4_K,type_b=f32,n_mats=128,n_used=8,b=0,m=768,n=512,k=2048,o=1,mul=1): OK
+  6/6 tests passed
+  Backend Vulkan0: OK
