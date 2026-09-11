@@ -3,8 +3,9 @@
 # (or the server dies), then print load time, VRAM use and the KV/compute buffer lines from the log.
 # Env passes through to serve.sh (NP, CTX, THREADS, THREADS_BATCH, NCMOE, EXTRA). Stop: asgard/stop.sh
 d=$(dirname "$(realpath "$0")")
-LOG=${LOG:-/var/tmp/local-ai-llama.log}; export LOG
-PID=/var/tmp/local-ai-llama.pid
+RUNS=${LOCAL_AI_RUNS:-$HOME/local-ai-runs}; mkdir -p "$RUNS"   # /var/tmp is a 1 GiB tmpfs symlink on asgard (wiped at boot)
+LOG=${LOG:-$RUNS/llama.log}; export LOG
+PID=$RUNS/llama.pid
 [ -f "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null && { echo "already running (pid $(cat "$PID")) - asgard/stop.sh first"; exit 1; }
 [ -f "$LOG" ] && mv "$LOG" "$LOG.prev"   # llama-server truncates --log-file on open; keep the previous run
 t0=$(date +%s)

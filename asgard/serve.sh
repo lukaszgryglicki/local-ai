@@ -28,4 +28,4 @@ exec "$B" --model "$d/../models/$MODEL_FILE" --alias "$MODEL_ALIAS,qwen3coder-lo
   --jinja --reasoning on --reasoning-budget -1 $KW_ARGS \
   --temp "$MODEL_TEMP" --top-p "$MODEL_TOP_P" --top-k "$MODEL_TOP_K" --min-p "$MODEL_MIN_P" --repeat-penalty 1.0 \
   --no-mmproj --no-ui --no-agent --offline --timeout 43200 --api-key-file "$d/../key.secret" \
-  --log-file "${LOG:-/var/tmp/local-ai-llama.log}" $EXTRA
+  --log-file "${LOG:-${LOCAL_AI_RUNS:-$HOME/local-ai-runs}/llama.log}" $EXTRA

@@ -2,7 +2,7 @@
 # /data/local-ai/asgard/download.sh MODEL - fetch one T-1 GGUF into ../models/ (gitignored, on the
 # zroot/data/local-ai dataset) with resume + size + sha256 verification against asgard/models.sh.
 # One model at a time (the box has ~10-13 MB/s on 5 GHz Wi-Fi -> ~15 min per 11 GiB file).
-# Background use: daemon -f -o /var/tmp/local-ai-dl-MODEL.log /data/local-ai/asgard/download.sh MODEL
+# Background use: daemon -f -o ~/local-ai-runs/dl-MODEL.log /data/local-ai/asgard/download.sh MODEL  (/var/tmp is a tmpfs wiped at boot)
 d=$(dirname "$(realpath "$0")")
 . "$d/models.sh"; model_env "${1:-north}" || exit 1
 mkdir -p "$d/../models"; cd "$d/../models" || exit 1

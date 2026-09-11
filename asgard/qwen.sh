@@ -9,7 +9,7 @@
 # Headless: MODEL=north asgard/qwen.sh --yolo -o stream-json "prompt"   (see asgard/rust-test.sh)
 d=$(dirname "$(realpath "$0")")
 . "$d/models.sh"; model_env "${MODEL:-north}" || exit 1
-h=/var/tmp/local-ai-qwen-home-asgard
+h=${LOCAL_AI_RUNS:-$HOME/local-ai-runs}/qwen-home
 mkdir -p "$h/.qwen"
 cat > "$h/.qwen/settings.json" <<EOF
 {

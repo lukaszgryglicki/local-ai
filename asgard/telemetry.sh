@@ -6,12 +6,13 @@
 # a llama-server run must be stopped before the watchdog's hard `shutdown -p`. This script only
 # observes and, at GUARD_PCH (default 102 C, watchdog crit is 110), runs asgard/stop.sh and logs the
 # event; it changes no thermal setting. Run under daemon(8):
-#   daemon -f -p /var/tmp/local-ai-telemetry.pid /data/local-ai/asgard/telemetry.sh /var/tmp/telemetry.csv
+#   daemon -f -p ~/local-ai-runs/telemetry.pid /data/local-ai/asgard/telemetry.sh ~/local-ai-runs/telemetry.csv
 # Columns: time,pch_c,core_max_c,cpu_max_mhz,cap_mhz,gpu_c,gpu_sm_mhz,gpu_w,gpu_util,gpu_throttle,server
 d=$(dirname "$(realpath "$0")")
-CSV=${1:-/var/tmp/telemetry.csv}
+RUNS=${LOCAL_AI_RUNS:-$HOME/local-ai-runs}; mkdir -p "$RUNS"
+CSV=${1:-$RUNS/telemetry.csv}
 GUARD_PCH=${GUARD_PCH:-102}
-EVENTS=${EVENTS:-/var/tmp/local-ai-guard.log}
+EVENTS=${EVENTS:-$RUNS/guard.log}
 [ -s "$CSV" ] || echo "time,pch_c,core_max_c,cpu_max_mhz,cap_mhz,gpu_c,gpu_sm_mhz,gpu_w,gpu_util,gpu_throttle,server" > "$CSV"
 ncpu=$(sysctl -n hw.ncpu)
 while :; do
