@@ -1,6 +1,6 @@
 #!/bin/sh
-# /data/local-ai/asgard/rust-verify.sh [DIR] - independent verification of the revstr project a model produced
-# via rust-test.sh (DIR defaults to .). Accepts the project either in DIR/revstr/ or directly in DIR (models read
+# /data/local-ai/asgard/verify-rust.sh [DIR] - independent verification of the revstr project a model produced
+# via e2e-test.sh MODEL rust (DIR defaults to .). Accepts the project either in DIR/revstr/ or directly in DIR (models read
 # "in the current directory" both ways). Nothing the model claims is trusted: fresh `cargo build --release`,
 # `cargo test`, byte-exact stdin round-trips against Python's s[::-1] (with and without trailing newline),
 # signature/test-count/deps/unsafe checks on the source, then a one-line VERDICT.
