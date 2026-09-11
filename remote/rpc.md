@@ -161,6 +161,49 @@ assuming a hang. The crash-safety prompt makes the model commit only at
 green-test milestones; a mega-turn's file writes land mid-turn, so the
 workspace can be hours newer than the last commit.
 
+## Run 2 final outcome — the supervised rerun (2026-09-09 → 09-11)
+
+Rerun of the same 8-milestone Rust challenge ("cxcalc", std-only complex-number
+calculator), this time under `qwen-super.sh` + self-healing tunnel. Stopped
+manually after ~55.6 h wall (too slow to continue, not a failure).
+
+- **Timeline:** launched 09-09 10:50Z → ran **52.4 h with zero client deaths**
+  (supervisor stayed at attempt 1/50), surviving a real ~47-min ISP outage
+  (09-10 14:13Z) fully autonomously. A FreeBSD **host reboot** 09-11 15:18Z
+  killed qwen+tunnel and wiped the /tmp session (see lesson below); fresh-mode
+  relaunch 15:30Z recovered in ~12 min; manual stop 18:25Z.
+- **Delivered: M0–M3 committed** (6 commits, tests green at every boundary),
+  **M4 (AST + Pratt parser) ~80% done** uncommitted at stop. 3,013 lines total:
+  SPEC.md 448, complex.rs 662 (30 tests), lexer.rs 758 (14 tests), ast.rs 349,
+  parser.rs 650 (12 tests). 56 tests. **Run 1 (no supervisor) scored 0/8** and
+  died on the first disconnect — the supervisor+tunnel pair is the difference.
+- **Server side:** llama-server up 2d08h, **0 errors** in the 39.5K-line log,
+  zero restarts; helpers up 2d13h. DevStats: 0 notReady / 0 abnormal pods for
+  the entire POC. Idle-quiet, no disk growth beyond logs.
+- **Speed reality (the reason we stopped):** tg decays 1.8 t/s fresh → 1.64
+  @69K ctx → 0.72 @146K → 0.46–0.55 @180–205K; ctx grows ~2.4–3.3K tok/h in
+  test/fix loops; mega-turns of 10–12K output tokens take 3–6 h each. Net rate
+  ≈ **1–1.5 milestones/day**. Verdict: provably crash-proof and correct, but
+  Q8 397B on 3 CPU nodes is only viable for tasks that tolerate week-long
+  timelines — for faster iteration use a smaller model (see Knobs/roadmap).
+- **Lessons applied:**
+  1. qwen session home MOVED off /tmp (tmpfs) → `/data/ai/qwen-remote-home`
+     (`h=` in qwen-remote.sh + `qhome=` in qwen-super.sh). The host reboot
+     wiped `/tmp` and lost the recorded session, forcing fresh mode instead of
+     `-c` resume. Never keep resume-state on tmpfs.
+  2. Known gap: after a host reboot the supervisor's try-1 logic picks *fresh*
+     even over a non-empty workspace (PROMPT is re-sent from scratch; the
+     "never delete files" rule + DEVLOG/STATUS let the model re-discover its
+     progress, which worked, but a `git log` check on try 1 → workspace-resume
+     would be cleaner).
+  3. `daemon`-started procs don't survive host reboots — if unattended runs
+     must span reboots, add rc.d services for tunnel + supervisor.
+- **Teardown (09-11 18:2xZ):** all procs killed by PID (llama-server, both
+  ggml-rpc-servers, qwen, supervisor, POC tunnel), logs removed (llama.log,
+  serve.out, rpc.log, bench logs); model, binaries, scripts, /data/ai dirs
+  left intact on all nodes; root disks back at 5/6/7% baseline; tdb01 RAM
+  41G used (was ~208G).
+
 ## Generation speed vs context depth
 
 Measured on Ornith Q8_0 (2026-09-08): tg 3.0 t/s @24K ctx → 2.46 @27K → 1.34
