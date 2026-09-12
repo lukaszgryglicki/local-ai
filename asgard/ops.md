@@ -17,10 +17,13 @@ touches it automatically". Everything llama-side lives in this repo (`/data/loca
 4. **The service is never in the boot sequence** while we research (`KEYWORD: nostart`). `/usr/local/etc/rc.d/llama`
    is a stub whose four commands call `asgard/llamactl.sh`; that script is the service.
 
-- **Driver limit (proven 12 Sep):** the NVIDIA FreeBSD driver rejects any single host-visible (pinned) Vulkan allocation
-  ≥ 256 MiB. Anything that makes ggml read or write one tensor slice ≥ 256 MiB in one go (context checkpoints of a
-  large f16 draft KV, `--cache-ram` slot saves of huge contexts, …) aborts an unpatched llama-server. Keep
-  `DRAFT_KV=q8_0`/`q4_0` and run the patched build (`build-vulkan-2`) once validated.
+- **Driver limit (measured 12 Sep):** the NVIDIA FreeBSD driver (595.99.02) fails single host-visible (pinned) Vulkan
+  allocations ≥ 256 MiB — all of them without `VK_EXT_memory_priority`, and with it (ggml's case) those in the windows
+  [256, 265), [512, 522), [1024, 1035), [2048, ≈2062) MiB, depending on the process' allocation history; < 256 MiB is
+  always fine. An unpatched llama-server aborts when ggml reads or writes one tensor slice that large in one go (context
+  checkpoints of a ≥ 128K-token f16 draft KV, `--cache-ram` slot saves of huge contexts, …). `serve.sh` therefore runs
+  the patched `build-vulkan-2` (chunked ≤ 64 MiB staging transfers, `patches/0001`) by default; `build-vulkan` is the
+  unpatched fallback (`B=`), and `DRAFT_KV=q8_0` stays the default.
 
 ## 1. What lives where
 
@@ -136,6 +139,11 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
 | 12:43 | **second SIGABRT** 9 min after the restart, first request after a 130K re-encode — `serve.out` caught it: `vk::Device::allocateMemory: ErrorOutOfDeviceMemory`, `Memory allocation of size 269924352 failed`, in `create_checkpoint` → `update_dft` → `state_seq_get_data` (Vulkan staging buffer for a 131 799-token f16 draft-KV slice) | root cause proven with a Vulkan probe: the NVIDIA FreeBSD driver rejects any **single host-visible allocation ≥ 256 MiB** (255 ok, total unlimited); no runtime knob exists (device-buffer knobs only, upstream master unchunked). Hand restart 13:06:2x `NP=1 GGML_VK_ALLOW_SYSMEM_FALLBACK=1 ./start.sh qwen9b`, harness resumed 13:06:28 (downtime 1 381 s, excluded). Flag is not on that code path, so its "success" is coincidence; kept only for this run |
 | 13:10 | `serve.sh`: `DRAFT_KV=q8_0` default (`--spec-draft-type-k/-v`, 1 088 B/token → cap ≈ 247K tokens; `q4_0` clears 262K); `start.sh --last` persists `DRAFT_KV` and `GGML_VK_ALLOW_SYSMEM_FALLBACK` | takes effect at the next server start (pid 87550 still runs f16 draft KV) |
 | 13:40 | `patches/0001-vulkan-chunk-staging-transfers.patch` (chunked `ggml_vk_buffer_read/_write`, ≤ 64 MiB pieces, `GGML_VK_STAGING_CHUNK_MB`) applied to `/data/ai/local-agent-poc/src/llama.cpp` (working tree, not built); `build-vulkan-2.sh` builds it into `build-vulkan-2/` | build + validation (`GGML_VULKAN_MEMORY_DEBUG=1`, > 131K-token checkpoint scenario, f16 draft KV, flag unset) only when no E2E task runs; then `serve.sh B=` → `build-vulkan-2/bin`, keep `build-vulkan` as fallback |
+| 14:18 | `build-vulkan-2.sh` finished (31 min, ggml-vulkan.cpp starved by the verify server for ~20 min; `NICE=19 J=6`) | `build-vulkan-2/bin/llama-server` + `libggml-vulkan.so` with the patch (RUNPATH → own bin dir; `build-vulkan/` untouched) |
+| 14:22 | `verify-staging.sh new f16` with chunking *off* (`GGML_VK_STAGING_CHUNK_MB=100000`, `-lv 5`, staging log on) — the diagnostic | staging grew 98 304 → … → 279 715 840 B, every ≥ 256 MiB allocation *succeeded* → the 12:43 failure is not a fixed cap; probes `pin2..pin5` then showed the priority-dependent 2^n windows + history dependence (results-t1.md) |
+| 14:40 | `EXTRA="-lv 5" verify-staging.sh new f16` (default 64 MiB chunking, 136 554-token prompt + follow-up; checkpoints at 132 161 / 135 526 / 136 534 / 136 550 tokens = 258–267 MiB f16 K slices) | **PASS**: staging capped at 67 108 864 B, both answers, server alive, 0 crash lines (`vt/staging-new-f16-144039.out`) |
+| 14:48 | `verify-staging.sh new q8_0` (the serve.sh default draft KV) | **PASS**: same, 471 s + 1.3 s; q8_0 draft KV works with Vulkan flash-attn (`vt/staging-new-q8_0-144842.out`) |
+| 14:40 | `serve.sh` default `B=` → `build-vulkan-2` (deployed via `.new` + `mv`; `build-vulkan` stays as fallback) | first used by the next server start (gemma) |
 
 ## 7. At the real end (when the research phase is over)
 

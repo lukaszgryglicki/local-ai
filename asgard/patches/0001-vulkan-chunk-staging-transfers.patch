@@ -1,8 +1,21 @@
 diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
-index a04a6b2..9a6d64d 100644
+index a04a6b2..720f208 100644
 --- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
 +++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
-@@ -8625,9 +8625,14 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void *
+@@ -8401,6 +8401,12 @@ static void deferred_memset(void * dst, uint32_t val, size_t size, std::vector<v
+ static void ggml_vk_ensure_sync_staging_buffer(vk_device& device, size_t size) {
+     if (device->sync_staging == nullptr || device->sync_staging->size < size) {
+         VK_LOG_MEMORY("ggml_vk_ensure_sync_staging_buffer(" << size << ")");
++        // asgard patch: GGML_VK_STAGING_LOG=1 reports every growth of the pinned staging buffer (rare)
++        static const bool staging_log = getenv("GGML_VK_STAGING_LOG") != nullptr;
++        if (staging_log) {
++            GGML_LOG_INFO("ggml_vulkan: %s sync staging buffer %zu -> %zu bytes\n", device->name.c_str(),
++                          device->sync_staging == nullptr ? (size_t) 0 : device->sync_staging->size, size);
++        }
+         ggml_vk_destroy_buffer(device->sync_staging);
+         device->sync_staging = ggml_vk_create_buffer_check(device, size,
+             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
+@@ -8625,9 +8631,14 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void *
      }
  }
  
@@ -18,15 +31,16 @@ index a04a6b2..9a6d64d 100644
  }
  
  static bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size_t offset, void * dst, size_t spitch, size_t dpitch, size_t width, size_t height, bool sync_staging = false) {
-@@ -8762,9 +8767,27 @@ static void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, si
+@@ -8762,9 +8773,28 @@ static void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, si
      }
  }
  
-+// asgard patch (2026-09-12): the NVIDIA FreeBSD driver (595.99.02, Quadro RTX 5000) refuses any single host-visible
-+// allocation >= 256 MiB (255 MiB ok, 256 MiB -> ErrorOutOfDeviceMemory; the total is unlimited). The sync staging
-+// buffer is sized to the largest single transfer, so a context-checkpoint read-back of a >= 128K-token f16 KV slice
-+// (2 KiB/token) aborted llama-server. Large transfers now go through the staging buffer in chunks
-+// (default 64 MiB, GGML_VK_STAGING_CHUNK_MB overrides).
++// asgard patch (2026-09-12): on the NVIDIA FreeBSD driver (595.99.02, Quadro RTX 5000) a single host-visible allocation
++// of >= 256 MiB fails with ErrorOutOfDeviceMemory depending on the process' live pinned allocations: sizes in windows just
++// above powers of two ([256,265), [512,522), [1024,1035) MiB, ...) fail or succeed depending on the allocation layout,
++// sizes < 256 MiB always work. The sync staging buffer is sized to the largest single transfer, so a context-checkpoint
++// read-back of a >= 128K-token f16 KV slice (2 KiB/token) aborted llama-server. Large transfers now go through the
++// staging buffer in chunks (default 64 MiB, GGML_VK_STAGING_CHUNK_MB overrides; e.g. 100000 = off).
 +static size_t ggml_vk_staging_chunk() {
 +    static size_t chunk = 0;
 +    if (chunk == 0) {

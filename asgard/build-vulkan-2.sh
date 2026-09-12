@@ -13,7 +13,7 @@ git apply --check /data/local-ai/asgard/patches/0001-vulkan-chunk-staging-transf
 grep -q GGML_VK_STAGING_CHUNK_MB ggml/src/ggml-vulkan/ggml-vulkan.cpp || { echo "patch not applied"; exit 1; }
 cmake -S "$SRC" -B "$B" -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DGGML_VULKAN=ON \
   -DGGML_NATIVE=ON -DGGML_CCACHE=ON -DGGML_OPENMP=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
-  -DLLAMA_OPENSSL=ON -DCMAKE_CXX_FLAGS=-I/data/ai/local-agent-poc/opt/spirv-headers/include
-nice -n 10 cmake --build "$B" -j "$J" --target llama-server
+  -DLLAMA_OPENSSL=ON -DCMAKE_PREFIX_PATH=/data/ai/local-agent-poc/opt/spirv-headers -DCMAKE_CXX_FLAGS=-I/data/ai/local-agent-poc/opt/spirv-headers/include
+nice -n ${NICE:-19} cmake --build "$B" -j "$J" --target llama-server
 ls -la "$B/bin/llama-server" "$B/bin/libggml-vulkan.so"
 echo "done: point serve.sh B= at $B/bin (and keep build-vulkan as the fallback)"

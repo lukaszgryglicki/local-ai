@@ -7,13 +7,15 @@
 # per-model sampling. MODEL = north | qwen9b | gemma | qwen35b (asgard/models.sh).
 # Env overrides: NP slots (default 1; ctx = NP x 256K unless CTX given), CTX, THREADS (8),
 # THREADS_BATCH (16), NCMOE (--n-cpu-moe, default per model), SPEC (--spec-type, default per
-# model; SPEC=none for raw decode speed), DRAFT_KV (KV type of the MTP draft context, default q8_0: with the f16
-# default the context-checkpoint read-back of the draft KV is one 2 KiB/token pinned buffer, and pinned allocations
-# > 256 MiB fail on this GPU/driver -> llama-server SIGABRT at ~128K+ contiguous tokens, 2026-09-12 12:21 and 12:43),
+# model; SPEC=none for raw decode speed), DRAFT_KV (KV type of the MTP draft context, default q8_0; with f16 the
+# context-checkpoint read-back of the draft KV is one 2 KiB/token pinned staging buffer and the NVIDIA driver fails
+# >= 256 MiB pinned allocations in size windows just above powers of two -> SIGABRT at 12:21/12:43 on 2026-09-12;
+# fixed by the chunked-staging patch in build-vulkan-2, q8_0 kept as belt and braces; details results-t1.md),
 # LOG, EXTRA (appended verbatim), IGPU_MOE=N (MoE expert weights
 # of the first N layers on the Intel iGPU = Vulkan1 instead of CPU RAM — the counterpart of NCMOE=N for the
 # "does not fit in VRAM" case; owner rule 2026-09-12: measure iGPU vs RAM with sweeps, do not guess),
-# DEV (--device, default Vulkan0), VKVIS (GGML_VK_VISIBLE_DEVICES, default 0).
+# DEV (--device, default Vulkan0), VKVIS (GGML_VK_VISIBLE_DEVICES, default 0), B (llama-server binary, default
+# build-vulkan-2 = default since 12 Sep 14:40: chunked-staging patch; build-vulkan = unpatched fallback), PORT (18080; side/validation servers use 18082).
 # Pinned-cap rules (plan §6): --load-mode none, never --check-tensors / GGML_VK_PREFER_HOST_MEMORY,
 # --cache-ram from models.sh, --spec-type from models.sh (draft-mtp only for *-MTP-GGUF files).
 # S3: a server with GPU work in flight survives the suspend as a process but its Vulkan fence never signals afterwards
@@ -22,7 +24,7 @@
 # start.sh/stop.sh: sudo service llama start|stop|restart|status (stub -> asgard/llamactl.sh). All of it: asgard/ops.md.
 d=$(dirname "$(realpath "$0")")
 . "$d/models.sh"; model_env "${1:-north}" || exit 1
-B=/data/ai/local-agent-poc/src/llama.cpp/build-vulkan/bin/llama-server
+B=${B:-/data/ai/local-agent-poc/src/llama.cpp/build-vulkan-2/bin/llama-server}   # patched build (patches/0001, chunked staging; validated 12 Sep). Fallback: B=.../build-vulkan/bin/llama-server
 NP=${NP:-1}; CTX=${CTX:-$((262144 * NP))}
 n=${NCMOE:-$MODEL_NCMOE}; NCMOE_ARGS=; [ "$n" -gt 0 ] && NCMOE_ARGS="--n-cpu-moe $n"
 KW_ARGS=; [ -n "$MODEL_KWARGS" ] && KW_ARGS="--chat-template-kwargs $MODEL_KWARGS"
@@ -34,7 +36,7 @@ if [ "${IGPU_MOE:-0}" -gt 0 ]; then   # same tensors --n-cpu-moe N would pin to 
 fi
 export GGML_VK_VISIBLE_DEVICES=$VKVIS
 exec "$B" --model "$d/../models/$MODEL_FILE" --alias "$MODEL_ALIAS,qwen3coder-local" \
-  --host 10.253.254.1 --port 18080 \
+  --host 10.253.254.1 --port "${PORT:-18080}" \
   --ctx-size "$CTX" --parallel "$NP" --gpu-layers 99 --device "$DEV" --fit off $NCMOE_ARGS $IGPU_ARGS \
   --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --cache-ram "$MODEL_CACHE_RAM" \
   --batch-size 2048 --ubatch-size 1024 --threads "${THREADS:-8}" --threads-batch "${THREADS_BATCH:-16}" \

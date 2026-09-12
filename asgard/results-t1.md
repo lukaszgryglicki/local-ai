@@ -301,15 +301,15 @@ regex), so the p1 column compares directly everywhere.
 | rust | 136 s | 9 | 12 (3) | 25 828 (22 845 @ 721 t/s) | 2 270 | 26.8 (17.1–52.5) | 27.3K | 63.4 % | **FAIL-task 14/18**: `reverse()` right, tests pass, but `main()` iterates `stdin.lock().lines()` and prints the reversed *accumulated* input after **every line** (and nothing for empty input) instead of reading all of stdin once → multi-line inputs and `""` wrong; single-line inputs correct. A dead `if l.ends_with('\n')` check shows it did not know `lines()` strips the newline |
 | go | 575 s | 27 | 30 (3) | 35 001 (22 993 @ 795 t/s) | 10 340 | 21.1 (13.9–34.0) | 39.0K | 62.1 % | **PASS 47/47**: vet/build/test clean, 147-line `main.go` + 242-line table-driven tests, `bufio.Reader`+`ReadAll`-style input so the 6 MB line is fine, `-n` semantics and tie-break exact. (Quirk: a bubble sort "for determinism in tests" — harmless here) |
 | c | **331 min** = 91 min fresh run (06:03–07:34, claimed done, rc=0) + **240 min resume (07:35–11:35, 4-h cap, rc=124)**; + 59 min of a first attempt lost to the 02:09 freeze | 698 assistant msgs | 317 (42) | 814 043 (cold: 127 291 @ 256 t/s on session resume, 201 716 @ 164 t/s = 20.5 min on the one compaction ≈ 09:35) | 244 447 | **17.8** (fresh run 29.7, resume **14.3**; 6.9–69.1) | **229.1K** | 64.4 % (72.5 % → 59.9 % at depth) | **FAIL-task**: 376-line `bignum.c`, strict `-Werror` + ASan builds OK, but the final state is *worse* than at 100K (then: `21` right, one operator printing `error`): the base-1e9 parser has an unsigned-offset UB (`bignum.c:114`), **every output line is empty (421/420 wrong)**, `stderr` is full of `MAIN:`/`DEBUG` prints, `selftest` never finishes; 23 `debug*.c`/`test_*.c` scratch files left in the project dir. |
-| asm | queued (runs next, server idle) | | | | | | | | `daemon -f -o ~/local-ai-runs/e2e-qwen9b-asm.log ./e2e-all.sh qwen9b asm` |
+| asm | **87 min** net of qwen time (11:46–13:48 = 121 min wall, **2 071 s of server downtime excluded**: 2× FAIL-infra aborts at 12:21 and 12:43, see below; 3 segments: 36 + 9 + 42 min) | 130 (27 + 2 + 101) | 127 (35) | 306 153 (two cold session re-encodes after the aborts: 130 017 @ 348 t/s and 132 861 @ 346 t/s = 12.6 min) | 26 531 | **15.7** (per request 8.9–42.2; answers ≥ 200 tokens 16.6) | 179.8K (131.4K right after the resume) | 48.0 % | **FAIL-task**: 160-line `b64.s` assembles and links without libc (as+ld ok, 6 syscalls, 2 520-byte static ELF) but **SIGSEGVs on every input** — 0/700 vectors, 0/20 blobs, `make test` fails; the code is incoherent (reads argc via `movzwl` off a mangled stack, `lodsb` with no `%rsi` set-up, `pushq error_msg(%rip)` as a "write", encode paths that never call write(2)). It spent the last segment re-running the segfaulting binary and writing a 27-line `minimal.s` probe until **qwen-code's loop detector halted the session** ("per-turn tool-call cap … repeated calls", turn 101). Model verdict; the two aborts were the server's (driver 256 MiB pinned cap, root-caused below) and did not touch the code |
 
 Speed notes: the MTP+ngram acceptance in agentic mode is **62–63 %** from the first turn (North: 17 % on rust), so
 short tool-call turns run 17–34 t/s instead of North's 13–22; the price is the deeper-context decay: 8.5–10 t/s at
 100K (North 13–15). Prompt batches at depth are slower than North's too (252–406 t/s at 25–40K vs 400–500).
 
-**qwen9b after three tasks**: 1 PASS (go, the medium task — North failed it), 2 FAIL (rust: reads stdin line by line; C: 5.5 h of persistent but unproductive debugging). The C session is the important data point for the T-1 decision: the model *does* debug for hours without giving up or faking a selftest (317 real tool calls, 95 edits, 153 shell runs), but past ~100K context it loses the thread — it rewrote the parser three times, littered the code with `fprintf(stderr, "DEBUG…")` it never removed, and ended with a binary that prints nothing. Its own "done" claim at 07:34 (rc=0 after 91 min) was false. Speed over the whole C session: **17.8 t/s aggregate generation** (29.7 while fresh, 14.3 over the 4-h resume, single requests down to 6.9 at 229K), prompt 152–195 t/s aggregate, and two cold re-encodes (session resume 8 min, compaction 20.5 min) that cost 13 % of the wall time. Against the owner's T-1 goal (> 12 t/s, never < 10, ideal 15–25): inside the band as a session aggregate, at the floor for individual deep-context turns.
+**qwen9b after four tasks**: 1 PASS (go, the medium task — North failed it), 3 FAIL-task (rust: reads stdin line by line; C: 5.5 h of persistent but unproductive debugging; asm: an incoherent 160-line encoder that segfaults, then a repetition loop that qwen-code had to halt). The C session is the important data point for the T-1 decision: the model *does* debug for hours without giving up or faking a selftest (317 real tool calls, 95 edits, 153 shell runs), but past ~100K context it loses the thread — it rewrote the parser three times, littered the code with `fprintf(stderr, "DEBUG…")` it never removed, and ended with a binary that prints nothing. Its own "done" claim at 07:34 (rc=0 after 91 min) was false. The asm task adds the low-level-systems verdict: x86-64 GAS with raw FreeBSD syscalls is beyond it (North at least produced a coherent 37-line stub with the wrong syscall table; qwen9b produced 160 lines that make no sense as a whole and could not recover). Speed over the whole C session: **17.8 t/s aggregate generation** (29.7 while fresh, 14.3 over the 4-h resume, single requests down to 6.9 at 229K), asm **15.7 t/s** at 131–180K context (8.9–42.2 per request, draft acceptance down to 48 %), prompt 152–195 t/s aggregate (346–348 t/s on the 130K cold re-encodes), and cold re-encodes (session resume 6–8 min, compaction 20.5 min) that cost 13 % of the C wall time. Against the owner's T-1 goal (> 12 t/s, never < 10, ideal 15–25): inside the band as a session aggregate, at the floor for individual deep-context turns. **Scoreboard so far — North 0/4, qwen9b 1/4 (go).** Speed-wise qwen9b is a T-1 candidate; quality-wise only one of the four tasks was solved, so the choice will depend on gemma and qwen35b.
 
-### FAIL-infra 12:21 + 12:43 CEST — llama-server SIGABRT ×2 during the qwen9b asm task (256 MiB pinned-allocation cap)
+### FAIL-infra 12:21 + 12:43 CEST — llama-server SIGABRT ×2 during the qwen9b asm task (≥ 256 MiB pinned staging allocation — fixed by patches/0001)
 
 - `pid 55179 (llama-server) … exited on signal 6` (kernel log 12:21:41), 35 min into the asm task (13 tool calls, ~99K
   context), while processing a 3 758-token prompt batch; the last server log line is
@@ -331,26 +331,37 @@ short tool-call turns run 17–34 t/s instead of North's 13–22; the price is t
   time `serve.out` has it: `Terminating due to uncaught exception 'vk::Device::allocateMemory: ErrorOutOfDeviceMemory'`,
   `ggml_vulkan: Memory allocation of size 269924352 failed.`, backtrace `llama_io_write_host::~llama_io_write_host` ←
   `llama_context::state_seq_get_data` ← `common_prompt_checkpoint::update_dft` ← `server_context_impl::create_checkpoint`.
-  Root cause, confirmed with a 40-line Vulkan probe (`vkAllocateMemory` on every host-visible memory type of the Quadro):
-  **the NVIDIA FreeBSD driver (595.99.02) refuses any single host-visible allocation ≥ 256 MiB** (255 MiB ok, 256 MiB →
-  `ErrorOutOfDeviceMemory`; the *total* is unlimited — 64 × 128 MiB succeed; the 246 MiB BAR heap caps at 128 MiB).
-  ggml's Vulkan backend sizes its pinned *staging buffer* to the largest single tensor read (`ggml_vk_buffer_read` →
-  `ggml_vk_ensure_sync_staging_buffer(size)`, no chunking), and a context checkpoint reads the MTP draft context's KV
-  (plain `llama_kv_cache` of the nextn layer, ignores `PARTIAL_ONLY`; f16 = 4 KV heads × 256 × 2 B = **2 048 B/token** per
-  K or V) as one slice per contiguous cell range: 269 924 352 B = 131 799 tokens × 2 048 — the first checkpoint past
-  131 072 tokens on a fresh, unfragmented context. Same cap behind the `Failed to allocate pinned memory` warning at every
-  load. The main-context checkpoints (133 MiB, recurrent state) are safe. There is **no runtime knob**: the env knobs
-  (`GGML_VK_FORCE_MAX_ALLOCATION_SIZE`, `GGML_VK_SUBALLOCATION_BLOCK_SIZE`, `GGML_VK_ALLOW_SYSMEM_FALLBACK`) only shape
-  *device* buffers, and upstream master (checked 12 Sep) still has the unchunked read.
-- Mitigations, in order of deployment: (1) `DRAFT_KV=q8_0` is now the serve.sh default (`--spec-draft-type-k/-v`;
-  1 088 B/token → the cap moves to ≈247K tokens; `q4_0` would clear the whole 262K window) — first used by the next
-  server start; (2) `patches/0001-vulkan-chunk-staging-transfers.patch` makes `ggml_vk_buffer_read/_write` go through
-  the staging buffer in ≤ 64 MiB pieces (`GGML_VK_STAGING_CHUNK_MB`), semantically identical, built by
-  `build-vulkan-2.sh` into a separate build dir when the GPU is idle, then validated with `GGML_VULKAN_MEMORY_DEBUG=1`
-  on a > 131K-token checkpoint scenario before `serve.sh` switches to it. The 13:06 restart with
-  `GGML_VK_ALLOW_SYSMEM_FALLBACK=1` survived a 132 861-token re-encode with f16 draft KV; that flag is *not* on the
-  staging code path and the process holds all 15 439 MiB in VRAM, so the survival is unexplained (the draft's cell
-  layout evidently left every slice < 256 MiB) — the validation run will log the real staging sizes.
+  Mechanism (read from the code, confirmed with `-lv 5` runs): ggml's Vulkan backend sizes its pinned *sync staging
+  buffer* to the largest single tensor transfer (`ggml_vk_buffer_read` → `ggml_vk_ensure_sync_staging_buffer(size)`,
+  destroy-then-create, no chunking), and a context checkpoint reads the MTP draft context's KV (plain `llama_kv_cache`
+  of the nextn layer, 262 144 cells, ignores `PARTIAL_ONLY`; f16 = 4 KV heads × 256 × 2 B = **2 048 B/token** per K or V)
+  as one slice per contiguous cell range: 269 924 352 B = 131 799 tokens × 2 048 — the `n_prompt − 4` checkpoint of the
+  first request past 131 072 tokens. The main-context checkpoints (133 MiB recurrent state + q8_0 KV slices) are safe.
+  Root cause, measured with five small Vulkan probes (`/tmp/pin*.c` on asgard, `vkAllocateMemory` on the Quadro's
+  host-visible memory types 2/3; type 4 is the 246 MiB BAR heap, caps at 128 MiB): **the NVIDIA FreeBSD driver
+  (595.99.02) fails single host-visible allocations ≥ 256 MiB** — *every* one of them without `VK_EXT_memory_priority`
+  (255 MiB ok, total unlimited), and with the priority extension (which ggml enables, priority 1.0) only sizes in the
+  windows just above powers of two: **[256, 265), [512, 522), [1024, 1035), [2048, ≈2062) MiB**; nothing below 256 MiB
+  ever fails. The outcome inside a window additionally depends on the process' pinned-allocation history (a replay of
+  the server's staging growth fails at 258.1 and 264.7 MiB in a fresh process but succeeds when the earlier buffers are
+  kept alive; the live server succeeded at 258.1–266.7 MiB in the 14:22 run and died at 257.4 MiB at 12:43) — so it is
+  not a fixed cap, it is not reproducible on demand, and no setting avoids it: `GGML_VK_FORCE_MAX_ALLOCATION_SIZE`,
+  `GGML_VK_SUBALLOCATION_BLOCK_SIZE` and `GGML_VK_ALLOW_SYSMEM_FALLBACK` only shape *device* buffers, upstream master
+  (12 Sep) still has the unchunked read, and the 13:06 server's survival to 180K with f16 draft KV was luck, not the flag.
+  Same driver behaviour behind the harmless `Failed to allocate pinned memory` warning at every load (the 544 MiB
+  Vulkan_Host compute buffer falls back to plain RAM).
+- Fix: `patches/0001-vulkan-chunk-staging-transfers.patch` — `ggml_vk_buffer_read/_write` go through the staging buffer
+  in ≤ 64 MiB pieces (`GGML_VK_STAGING_CHUNK_MB`, 100000 = off; `GGML_VK_STAGING_LOG=1` + `-lv 5` prints every staging
+  growth), semantically identical, built by `build-vulkan-2.sh` into `build-vulkan-2/` (13:47–14:18, `NICE=19 J=6`,
+  alongside the untouched `build-vulkan/`). Validation with `verify-staging.sh` (side server on :18082, NP=1, ctx
+  262 144, a 136 554-token synthetic prompt + a follow-up that re-uses the cache; the first request alone creates
+  checkpoints at 132 161 / 135 526 / 136 534 / 136 550 tokens, the follow-up more): the new build with chunking
+  *off* (`GGML_VK_STAGING_CHUNK_MB=100000`, 14:22 diagnostic) → staging grew to 279 715 840 B and *happened* to
+  succeed (window luck, see above); **new build, default chunking →
+  staging capped at 67 108 864 B, both answers correct, server alive** (f16 draft KV: 14:40–14:48, 136 554 tok in 459 s, follow-up 1.6 s; q8_0 draft KV:
+  14:48–14:57, 471 s, follow-up 1.3 s — also proves q8_0 draft KV + Vulkan FA works). `serve.sh` defaults to the patched binary since 14:40 (`B=` overrides; `DRAFT_KV=q8_0` stays as a
+  belt-and-braces default — 1 088 B/token). The patch is upstream-PR material (any Vulkan driver with a per-allocation
+  host-visible limit hits this on ≥ 128K-token f16 checkpoints).
 - Downtime: 690 s + 1 381 s, excluded from the asm wall time; the 12:43 recovery was manual too (the harness that runs
   the asm task predates the auto-restart). Verdict stays a model verdict.
 
@@ -446,6 +457,43 @@ Still open: S3 with an *idle* server (no request in flight) — `zzz-probe.sh pr
 context survives (the owner's call before a manual `zzz`). The live cycle of the watchdog hooks (`unstick.sh
 pre-suspend` → `post-resume`, start.sh and hand-started provenance) and `service llama stop/start` are exercised on
 the idle server between the C and asm tasks (§ below).
+
+## 3. Gemma-4-26B-A4B-it UD-IQ3_S (T-1 alt, generalist)
+
+First model started on the patched `build-vulkan-2` (chunked staging), 14:58; the GGUF has no MTP head → `SPEC=ngram-mod`
+default, `MODEL_CACHE_RAM=0`, `GGML_VK_ALLOW_SYSMEM_FALLBACK` unset. Thermal policy: BIOS Cool as before.
+
+### Fit (ctx = NP × 262 144, q8_0 KV, `--fit off`)
+
+| NP | result |
+|---|---|
+| 4, 3, 2 | `failed to allocate Vulkan0 buffer of size 570425344` → `failed to allocate buffer for kv cache` (the 128 experts' 10.5 GiB of weights leave no room for a second 262K KV) |
+| **1** | **UP in 11 s, 14 545 / 16 384 MiB** (plan estimate 14.7 GiB: weights 10.6 + KV 2.66 + SWA 0.16 + compute 1.2) |
+
+So **NP=1 at 262K**, like North and qwen9b — nothing in T-1 fits two 262K slots on 16 GiB.
+
+### Speed — spec-decoding sweep (`sweep.sh gemma "ngram=ngram-mod" "none=none"`, 14:59–15:07, BIOS Cool, 150 s idle gaps, greedy, thinking on, 2 048 tok cap)
+
+| config (`SPEC=`) | VRAM MiB | p0 rust-reverse: gen tok / t/s | p1 nginx-regex: gen tok / t/s | aggregate t/s | GPU start → end |
+|---|---|---|---|---|---|
+| `ngram-mod` | 14 545 | 673 / **48.54** | 1 552 / 40.56 | 42.72 | 48 → 65 °C |
+| `none` | 14 545 | 673 / **48.27** | 2 048\* / **43.79** | **44.85** | 50 → 66 °C |
+
+\* p1 answers differ (1 552 vs 2 048 tokens, the batch-shape non-determinism seen on every model), p0 is identical
+(same 673-token answer) and compares directly.
+
+- **~48 t/s cold, 40–44 t/s on the second request** — 4B active parameters make Gemma the fastest T-1 candidate by far
+  (qwen9b 27–33 t/s with MTP, North ~23 t/s no-spec), far above the T-1 goal (≥ 12, ideally 15–25 t/s).
+- `ngram-mod` is neutral-to-negative on these short prompts (p1 −7 %, 192 of 1 552 tokens came from drafts at 50 %
+  acceptance — no repetition to mine). The E2E runs with the models.sh default `ngram-mod` anyway, like North and
+  qwen9b (its win is whole-file re-emission at long context: North 90–95 % acceptance); the E2E `speculative` summary
+  lines decide the frozen config.
+
+**E2E choice: `SPEC=ngram-mod`, NP=1, ctx 262 144, patched build** (`e2e-all.sh gemma`, started 15:08).
+
+### Full test — the four-task E2E (`e2e-all.sh gemma`, 15:08–, `SPEC=ngram-mod`, NP=1, ctx 262 144)
+
+GEMMA_E2E
 
 ## E2E tasks — the four-task suite (`e2e-tasks.sh`, `e2e-test.sh`, `e2e-all.sh`, `verify-*.sh`)
 
