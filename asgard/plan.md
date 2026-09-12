@@ -412,6 +412,7 @@ threads, placement):
 | profile | tier | placement rule | **generation-speed goal** (owner, 11:20; output t/s, session aggregate) |
 |---|---|---|---|
 | `fastest-vram` | T-1 | everything in the Quadro (weights, 256K q8_0 KV, compute); the fastest model that passes the coding tasks | expect **> 12 t/s**, never **< 10**, ideal **15–25 t/s** |
+|  | **T-1 result (12 Sep 21:46)** | **`qwen35b`** = Qwen3.6-35B-A3B UD-IQ2_M, `SPEC=none`, NP=1, ctx 262 144, `--cache-ram 8192`, `build-vulkan-2` — 2/4 E2E + a near-miss (North 0/4, qwen9b 1/4, gemma 1/4), frozen as the default of `start.sh`/`serve.sh`/`qwen.sh`/`llamactl.sh`; `results-t1.md` §5 | measured **34.8–45.8 t/s** session aggregate, worst request 18.1 t/s at 230K — goal exceeded |
 | `fast` | T0 | VRAM first, overflow to the **iGPU (Vulkan1) before CPU RAM** — whichever measures faster; no OOM, no "slow-token" regime | not slower than **6 t/s**, absolute minimum **4**, ideal **≥ 7–10 t/s** |
 | `best` | T1 (T2 optional — owner decides at the end; T1 is already at the edge of usability) | as much as fits across VRAM + iGPU + RAM, whichever split is fastest, for the best quality | expect **≥ 1.8 t/s**, absolute low **1 t/s** (below = unusable), ideal **> 3 t/s** |
 

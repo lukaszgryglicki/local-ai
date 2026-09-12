@@ -291,7 +291,8 @@ Status: llama.cpp v0.4.0 built natively with Vulkan, Quadro visible as
 below, not a kernel bug). Models: `/data/local-ai/models/*.gguf` (gitignored,
 on the dataset), fetched one at a time with `asgard/download.sh MODEL` and
 each put through the full test before the next download — see
-`asgard/results-t1.md`. Everything else, incl. the ranked shortlist (T-1
+`asgard/results-t1.md`; the consolidated T-1 report (winner `qwen35b`, scoreboard, incidents, frozen config) is
+**`asgard/report-t1.md`**. Everything else, incl. the ranked shortlist (T-1
 North-Mini-Code / Qwen3.5-9B / Gemma-4-26B-A4B, T0 Qwen3.6-35B-A3B, T0b
 KAT-Coder, T1, T2 Qwen3.8-Flash-Next), is in `asgard/plan.md`; the
 end-of-groundwork report is `asgard/status-2026-09-11.md`.

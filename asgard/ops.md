@@ -63,7 +63,7 @@ NP=1 ./start.sh qwen9b            # by hand, with knobs (see serve.sh header); p
 ./stop.sh                          # TERM, KILL after 30 s
 ./llamactl.sh status               # or: sudo service llama status
 sudo service llama start           # replay the last start (whoever made it) — first ever: DEFAULT_MODEL in llamactl.sh
-sudo service llama start gemma     # that model with its defaults (NP=1, ctx 262144, models.sh spec/cache-ram)
+sudo service llama start gemma     # that model with its defaults (NP=1, ctx 262144, models.sh spec/cache-ram); no MODEL = last start or qwen35b (T-1 winner)
 sudo service llama restart         # stop + the same config again
 sudo service llama stop
 ./unstick.sh show                  # who/how/where the server runs, what a restart would do
@@ -144,6 +144,14 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
 | 14:40 | `EXTRA="-lv 5" verify-staging.sh new f16` (default 64 MiB chunking, 136 554-token prompt + follow-up; checkpoints at 132 161 / 135 526 / 136 534 / 136 550 tokens = 258–267 MiB f16 K slices) | **PASS**: staging capped at 67 108 864 B, both answers, server alive, 0 crash lines (`vt/staging-new-f16-144039.out`) |
 | 14:48 | `verify-staging.sh new q8_0` (the serve.sh default draft KV) | **PASS**: same, 471 s + 1.3 s; q8_0 draft KV works with Vulkan flash-attn (`vt/staging-new-q8_0-144842.out`) |
 | 14:40 | `serve.sh` default `B=` → `build-vulkan-2` (deployed via `.new` + `mv`; `build-vulkan` stays as fallback) | first used by the next server start (gemma) |
+| 14:58–16:33 | gemma: fit ladder (NP 4/3/2 fail, **NP=1 14 545 MiB**), sweep `ngram-mod` vs `none` (48.5 vs 48.3 t/s cold, a wash), E2E all four with `ngram-mod` | rust PASS, go 46/47, c FAIL, asm FAIL (never ran the assembler) = **1/4**; first full run on the patched build, ctx to 141.8K, 0 restarts |
+| 16:37–21:43 | qwen35b: fit (NP=2 fails, **NP=1 14 099 MiB**), sweep (`none` **58.7** vs `ngram-mod` 50.3 t/s aggregate, +17 %), E2E all four with `SPEC=none` | rust PASS 110 s, go PASS 256 s, c near-miss (420/420 arithmetic), asm FAIL at the 4-h cap = **2/4**; 5 h 20 min serving, ctx to 234.6K (two compactions), `--cache-ram 8192`, 0 restarts, 0 FAIL-infra |
+| 21:46 | **T-1 frozen**: `models.sh` qwen35b `MODEL_SPEC=none`; default model `qwen35b` in `start.sh`, `serve.sh`, `qwen.sh`, `llamactl.sh` (`DEFAULT_MODEL`); bare `./start.sh` verified (UP in 5 s, 14 099 MiB, `--spec-type none`), then `stop.sh` | `sudo service llama start` = the `fastest-vram` profile from now on; results-t1.md §5 |
+| 22:00 | T0 start: models.sh gains `qwen35b-q4`, `kat-q4`, `qwen35b-q8` (+ `MODEL_IGPU_MOE` per model, honoured by serve.sh); serve.sh `IGPU_MOE` path fixed (`--split-mode layer --tensor-split 1,0`; `none` prunes the device list → abort at load); placement sweep on the IQ2_M file: 20 expert layers in CPU RAM 30.4 t/s vs on the iGPU 14.5 t/s (pp 103 vs 6 t/s) | overflow goes to CPU RAM; results-t0.md §1; download queue `~/local-ai-runs/dl-t0-queue.sh` running |
+| 22:36–22:52 | `qwen35b-q4` downloaded + sha256 OK; fit ladder k=14/16 fail, **k=18 UP-but-OOM at first decode**, **k=20 = 15 144 MiB**; sweep `none` **30.7 t/s** agg (pp 83–90), `ngram-mod` 28.2 | `MODEL_NCMOE=20` confirmed; "UP is not fit" rule; results-t0.md §2 |
+| 22:50–23:10 | two-device (Quadro+P630) load failure root-caused: one failed pinned `vkAllocateMemory` (515 MiB `token_embd` right after the big Intel allocation) poisons every later NVIDIA allocation in the process; work-around `--override-tensor token_embd.weight=Vulkan0`; true-iGPU Q4 sweep **16.2 t/s / pp 6** → `IGPU_MOE` retired; `sweep.sh` multi-word `EXTRA` quoting fixed | results-t0.md §1; CPU RAM is the T0/T1 overflow target, final |
+| **23:10:41** | **`acpi_acad0: Off Line` — AC power lost** (physical; the only AC event since the 05:55 boot). Unnoticed until 23:41: box runs on, Quadro capped at P2/1 035 MHz ("Idle" reason), frozen T-1 config 16.2 instead of 61.3 t/s, `qwen35b-q4` 6.7 instead of 30.7 t/s; every measurement 23:11–23:41 invalid (depth bench, EPP, `--no-host`, controls) | **FAIL-infra**, nothing charged to a model; results-t0.md §3 |
+| 23:42–23:46 | server stopped, Q8 download paused at 13.97/36.9 GB (`.part` resumes), backlight 10 %, EPP back to 100, **`battery-guard.sh`** (root `daemon`, log `~/local-ai-runs/battery-guard.log`): exits when AC returns, clean `shutdown -p now` at ≤ 5 % / ≤ 5 min. Battery 51 %, ~33 W idle draw, ~65 min | **waiting for AC**; no GPU work until then; thermal-watchdog patched (`ac=` field + AC-transition events; live after the next `service thermal_watchdog restart`) |
 
 ## 7. At the real end (when the research phase is over)
 

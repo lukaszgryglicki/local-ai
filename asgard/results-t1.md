@@ -508,7 +508,7 @@ tasks would have been the risk zone with an MTP draft; gemma has none). Behaviou
 and moves on without running the build/tests (asm: 0 shell calls; C: kept its own failing selftest); the one thing
 North/qwen9b did more of (looping on tool output) it does less, which is why it is quick and why it misses the last mile.
 
-## 4. Qwen3.6-35B-A3B UD-IQ2_M (T-1b, test-only: a 35B-A3B entirely in VRAM with 2-bit experts)
+## 4. Qwen3.6-35B-A3B UD-IQ2_M (T-1b → **T-1 winner**: a 35B-A3B entirely in VRAM with 2-bit experts)
 
 Non-MTP file → `ngram-mod`/`none` only; `MODEL_CACHE_RAM=8192`, patched build, `GGML_VK_ALLOW_SYSMEM_FALLBACK` unset.
 
@@ -542,7 +542,48 @@ Non-MTP file → `ngram-mod`/`none` only; `MODEL_CACHE_RAM=8192`, patched build,
 | rust | **110 s** | 14 | 14 (1) | 25 777 (22 857 @ 800 t/s) | 2 849 | 45.8 (38.9–47.7) | 28.6K | **PASS 18/18** round-trips, 47-line `main.rs`, 4 tests pass; 5 shell commands — builds and tests as told |
 | go | **256 s** | 20 | 20 (5) | 33 250 (23 005 @ 963 t/s) | 8 489 | 44.0 (39.3–48.7) | 37.3K | **PASS 47/47** incl. the 6 MB single line; 527 lines (`main.go` + 5 table-driven test funcs), vet/build/test clean; 13 shell commands |
 | c | 2 584 s (43 min) | 117 | 117 (10) | 82 444 (23 037 @ 967 t/s; 383 t/s agg) | 76 970 | 34.8 (26.6–44.8) | 135.3K | **FAIL-task, near-miss**: 488-line `bignum.c`, `-Werror` + ASan/UBSan clean, `make test`/`--selftest` ok, **420/420 arithmetic lines exact** (incl. 3 000-digit operands) — but blank input lines are echoed as empty output lines instead of skipped (and some malformed lines emit an extra empty line), so the malformed/blank check fails. 57 shell commands + 38 edits in 117 turns: a real build–test–fix loop, no looping |
-Q35_E2E
+| asm | **14 400 s (4-h cap, rc=124)** | 253 requests / ~250 msgs | 253 (44) | 343 619 (82 019 @ 438 t/s; 214 t/s agg) | 382 591 | 30.4 (18.1–43.0) | 234.6K (two compactions, ≈ 234K → 30K → 224K → 40K) | **FAIL-task**: 497-line `b64.s` assembles and links, but encoding SIGSEGVs on every non-empty input (rc −11) and `-d` is rejected as usage error (rc 2) → 1/700 encode (only the empty vector), 0/700 decode; Makefile and test.sh never written. 212 shell commands, 11 rewrites, 14 edits, ktrace even — four hours of honest debugging (no loop-detector stop) that never converged; after each compaction it spent 25K+ tokens re-thinking before touching a file |
+
+**qwen35b after four tasks**: 2 PASS (rust in 110 s, go 47/47 in 256 s — the only model to pass both easy and medium),
+1 near-miss (C: 420/420 arithmetic, ASan-clean, only blank-line echo wrong), 1 FAIL-task (asm at the 4-h cap). It is
+also the model that *behaves* like an agent: it runs what it writes (5 / 13 / 57 / 212 shell commands per task), keeps
+a build–test–fix loop going for hours without repeating itself, and its 2-bit experts cost it nothing visible on rust/go.
+Speed on the E2E: 30–46 t/s aggregate, worst request 18 t/s at 230K context; prompt processing 214–666 t/s aggregate
+(MoE, like gemma: 82K cold re-encode ≈ 3.1 min). Infra: 5 h 20 min of continuous serving on the patched build, contexts
+up to 234.6K with `--cache-ram 8192`, zero restarts, zero FAIL-infra.
+
+## 5. T-1 verdict — the `fastest-vram` profile (2026-09-12 21:46)
+
+Four candidates, the same four E2E tasks, NP=1 at the full native 262 144 context, everything in the Quadro. Every
+verdict below is a model verdict (`FAIL-task`); the only infra events of the whole T-1 phase were the 02:09 freeze
+(qwen9b C, re-run) and the two 12:21/12:43 llama-server aborts (qwen9b asm, root-caused and fixed, §2).
+
+| task | North-Mini-Code IQ3_XXS | Qwen3.5-9B Q8_0 + MTP | Gemma-4-26B-A4B IQ3_S | **Qwen3.6-35B-A3B IQ2_M** |
+|---|---|---|---|---|
+| rust (easy) | FAIL (stray space) · 2.6 min | FAIL 14/18 · 2.3 min | **PASS** · 4.6 min | **PASS** · **1.8 min** |
+| go (medium) | FAIL 46/47 (Scanner) · 16 min | **PASS** · 9.6 min | FAIL 46/47 (Scanner) · 2.7 min | **PASS** · **4.3 min** |
+| c (hard) | FAIL (stub) · 39 min | FAIL (UB, 5.5 h cap) | FAIL (double-free, 0/420) · 36 min | FAIL **near-miss** (420/420 arithmetic, blank-line echo) · 43 min |
+| asm (hard, long ctx) | FAIL (Linux syscalls) · 30 min | FAIL (SIGSEGV, loop) · 87 min | FAIL (never assembled, 0 shell calls) · 39 min | FAIL (SIGSEGV, 4-h cap, 212 shell calls) |
+| **score** | **0 / 4** | **1 / 4** | **1 / 4** | **2 / 4** (+ near-miss) |
+| tg t/s, session aggregate (worst request) | 23.0–32.0 (9.5) | 15.7–26.8 (6.9 @ 200K) | 30.3–55.8 (19.7) | 34.8–45.8 (18.1 @ 230K) |
+| pp t/s aggregate | 591–1 067 | 256–795 | 233–599 | 214–666 |
+| ctx max reached | 132.8K | 229.1K | 141.8K | 234.6K |
+| VRAM @ NP=1 (MiB) | 15 623 | 15 337 | 14 545 | 14 099 |
+| speed goal (> 12, never < 10, ideal 15–25) | met | met on aggregate; **fails the floor at depth** (6.9 t/s @ 200K, 14.3 in the resumed C run) | exceeded | exceeded (worst request 18.1) |
+
+**Winner: `qwen35b` = Qwen3.6-35B-A3B UD-IQ2_M, `SPEC=none`, NP=1, ctx 262 144, `--cache-ram 8192`, patched
+`build-vulkan-2`.** Frozen on 12 Sep 21:46: `models.sh` (`MODEL_SPEC=none`), default model of `start.sh`, `serve.sh`,
+`qwen.sh` and `llamactl.sh` (`sudo service llama start` with no argument brings it up; `start.sh qwen35b` verified UP in
+5 s, 14 099 MiB). Why it and not gemma (same score, faster raw decode): qwen35b passed *both* easy and medium tasks, came
+within one detail of the hard C task, and is the only candidate that behaves like a coding agent — it runs its own
+builds and tests every time (5/13/57/212 shell commands), while gemma wrote files blind and North/qwen9b looped. The 2-bit
+experts did not show on rust/go; where it fell short (C blank lines, asm) the failures are reasoning failures, not
+quantisation artefacts we could point at. Speed clears the T-1 goal with margin at every depth (30–46 t/s aggregate,
+18 t/s worst request at 230K); prompt processing is the price of a 128-expert MoE on Vulkan (an 82K cold re-encode ≈ 3 min).
+
+Notes for T0/T1 (not started): T0 candidates that do *not* fit VRAM must measure `IGPU_MOE=k` vs `NCMOE=k` (owner rule)
+— the question never arose in T-1 because all three remaining candidates fit whole; KAT-Coder-V2.5-Dev (a coding
+fine-tune of this very model) and the MTP file of Qwen3.6-35B-A3B are the obvious T0 follow-ups.
 
 ## E2E tasks — the four-task suite (`e2e-tasks.sh`, `e2e-test.sh`, `e2e-all.sh`, `verify-*.sh`)
 

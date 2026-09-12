@@ -15,7 +15,7 @@
 #   status         pid, how it was started, /health, /props, /slots - metadata only (asgard/health.sh sends a real
 #                  completion: never while a task runs, with NP=1 it would evict the task's cache)
 SERVICE_USER=lgryglicki
-DEFAULT_MODEL=qwen9b
+DEFAULT_MODEL=qwen35b   # T-1 winner, 12 Sep 2026 (results-t1.md §5)
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 d=$(dirname "$(realpath "$0")"); MODE=${1:-status}; [ $# -gt 0 ] && shift
 if [ "$(id -un)" != "$SERVICE_USER" ]; then

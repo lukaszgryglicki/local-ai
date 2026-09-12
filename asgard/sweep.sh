@@ -17,7 +17,7 @@ for cfg in "$@"; do
   label=${cfg%%=*}; rest=${cfg#*=}; spec=${rest%%;*}; extra=; envs=
   case $rest in *\;*) rest=${rest#*;}; extra=${rest%%;*}; case $rest in *\;*) envs=${rest#*;};; esac;; esac
   ./stop.sh >/dev/null 2>&1; sleep "$GAP"
-  up=$(env $envs SPEC=$spec EXTRA=$extra ./start.sh "$M" 2>&1 | head -1 | cut -c1-160)
+  up=$(env $envs SPEC=$spec EXTRA="$extra" ./start.sh "$M" 2>&1 | head -1 | cut -c1-160)
   case $up in UP*) ;; *) echo "$(date +%T) $label START_FAILED: $up"; echo "$label,START_FAILED" >> "$OUT"; continue;; esac
   echo "$(date +%T) $label START $(st) | $up"
   MAXTOK=$MAXTOK TEMP=0 python3 codebench.py "$label" 2 | tee -a "$OUT"

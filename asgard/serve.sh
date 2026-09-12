@@ -23,15 +23,22 @@
 # thermal watchdog's suspend action stops it first and restarts it after (asgard/unstick.sh). Service form of
 # start.sh/stop.sh: sudo service llama start|stop|restart|status (stub -> asgard/llamactl.sh). All of it: asgard/ops.md.
 d=$(dirname "$(realpath "$0")")
-. "$d/models.sh"; model_env "${1:-north}" || exit 1
+. "$d/models.sh"; model_env "${1:-qwen35b}" || exit 1
 B=${B:-/data/ai/local-agent-poc/src/llama.cpp/build-vulkan-2/bin/llama-server}   # patched build (patches/0001, chunked staging; validated 12 Sep). Fallback: B=.../build-vulkan/bin/llama-server
 NP=${NP:-1}; CTX=${CTX:-$((262144 * NP))}
-n=${NCMOE:-$MODEL_NCMOE}; NCMOE_ARGS=; [ "$n" -gt 0 ] && NCMOE_ARGS="--n-cpu-moe $n"
+IGPU_MOE=${IGPU_MOE:-${MODEL_IGPU_MOE:-0}}
+# IGPU_MOE replaces the CPU offload unless NCMOE is given explicitly (--n-cpu-moe is itself a =CPU tensor override
+# and, listed first, would shadow the =Vulkan1 one for the same layers - the 22:44 "igpu20" sweep row was really cpu20)
+[ "$IGPU_MOE" -gt 0 ] && n=${NCMOE:-0} || n=${NCMOE:-$MODEL_NCMOE}
+NCMOE_ARGS=; [ "$n" -gt 0 ] && NCMOE_ARGS="--n-cpu-moe $n"
 KW_ARGS=; [ -n "$MODEL_KWARGS" ] && KW_ARGS="--chat-template-kwargs $MODEL_KWARGS"
 DEV=${DEV:-Vulkan0}; VKVIS=${VKVIS:-0}; IGPU_ARGS=
-if [ "${IGPU_MOE:-0}" -gt 0 ]; then   # same tensors --n-cpu-moe N would pin to CPU, pinned to the iGPU instead
+if [ "$IGPU_MOE" -gt 0 ]; then   # same tensors --n-cpu-moe N would pin to CPU, pinned to the iGPU instead
   alt=$(i=0; sep=; while [ $i -lt "$IGPU_MOE" ]; do printf '%s%d' "$sep" $i; sep='|'; i=$((i+1)); done)
-  IGPU_ARGS="--override-tensor blk\.($alt)\.ffn_(up|down|gate)_exps\.weight=Vulkan1 --split-mode none --main-gpu 0"
+  # NOT --split-mode none: that prunes the model's device list to main-gpu, so the Vulkan1 buffers have no backend
+  # in the scheduler and the server aborts at load ("pre-allocated tensor ... in a buffer (Vulkan1) that cannot run
+  # the operation"); layer split with --tensor-split 1,0 keeps every layer (and its KV) on the Quadro.
+  IGPU_ARGS="--override-tensor blk\.($alt)\.ffn_(up|down|gate)_exps\.weight=Vulkan1 --split-mode layer --tensor-split 1,0 --main-gpu 0"
   DEV=Vulkan0,Vulkan1; VKVIS=0,1
 fi
 export GGML_VK_VISIBLE_DEVICES=$VKVIS

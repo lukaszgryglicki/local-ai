@@ -1,6 +1,6 @@
 #!/bin/sh
 # /data/local-ai/asgard/qwen.sh [qwen args] - qwen-code session against the asgard server (run on asgard).
-# MODEL=north|qwen9b|gemma|qwen35b (default north) must match what asgard/serve.sh is serving: it sets
+# MODEL=north|qwen9b|gemma|qwen35b (default qwen35b, the T-1 winner) must match what asgard/serve.sh is serving: it sets
 # the model name shown in the UI and the per-model sampling (asgard/models.sh). Everything else as in
 # ../qwen.sh: throwaway HOME so the real qwen config is untouched, report_findings excluded (its JSON
 # schema breaks this llama build's grammar converter -> HTTP 400), no short client caps (lifetime cap
@@ -8,7 +8,7 @@
 # context.autoCompactThreshold 0.95: auto-compaction only at 95% of the 256K window (qwen default 0.85).
 # Headless: MODEL=north asgard/qwen.sh --yolo -o stream-json "prompt"   (see asgard/rust-test.sh)
 d=$(dirname "$(realpath "$0")")
-. "$d/models.sh"; model_env "${MODEL:-north}" || exit 1
+. "$d/models.sh"; model_env "${MODEL:-qwen35b}" || exit 1
 h=${LOCAL_AI_RUNS:-$HOME/local-ai-runs}/qwen-home
 mkdir -p "$h/.qwen"
 cat > "$h/.qwen/settings.json" <<EOF
