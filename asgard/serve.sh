@@ -13,7 +13,10 @@
 # DEV (--device, default Vulkan0), VKVIS (GGML_VK_VISIBLE_DEVICES, default 0).
 # Pinned-cap rules (plan §6): --load-mode none, never --check-tensors / GGML_VK_PREFER_HOST_MEMORY,
 # --cache-ram from models.sh, --spec-type from models.sh (draft-mtp only for *-MTP-GGUF files).
-# VRAM survival across S3 is untested; the thermal watchdog's suspend action leaves the server running on purpose.
+# S3: a server with GPU work in flight survives the suspend as a process but its Vulkan fence never signals afterwards
+# (live test 2026-09-12 07:26: TERM-immune, VRAM held). Owner rules: you stop/start it around your own zzz; only the
+# thermal watchdog's suspend action stops it first and restarts it after (asgard/unstick.sh). Service form of
+# start.sh/stop.sh: sudo service llama start|stop|restart|status (stub -> asgard/llamactl.sh). All of it: asgard/ops.md.
 d=$(dirname "$(realpath "$0")")
 . "$d/models.sh"; model_env "${1:-north}" || exit 1
 B=/data/ai/local-agent-poc/src/llama.cpp/build-vulkan/bin/llama-server

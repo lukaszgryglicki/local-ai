@@ -1,0 +1,28 @@
+#!/bin/sh
+# PROVIDE: llama
+# REQUIRE: LOGIN
+# KEYWORD: nostart
+#
+# /usr/local/etc/rc.d/llama - STUB. Every command is /data/local-ai/asgard/llamactl.sh; edit that file, never this one.
+#   sudo service llama start [MODEL] | stop | restart [MODEL] | status
+# nostart = never part of the boot sequence (rcorder -s nostart in /etc/rc), even with llama_enable=YES - which only
+# unlocks the plain commands (onestart/onestop/onerestart/onestatus work either way). Nothing at shutdown, nothing at
+# suspend/resume: the owner starts/stops llama; only the thermal watchdog's suspend hooks touch it (asgard/unstick.sh).
+# At the real end: drop "nostart" from the KEYWORD line to start it at boot.
+# Source of this file: /data/local-ai/asgard/rc.d/llama (install -m 555 ... /usr/local/etc/rc.d/llama)
+
+. /etc/rc.subr
+
+name=llama
+rcvar=llama_enable
+load_rc_config $name
+: ${llama_enable:="NO"}
+: ${llama_ctl:="/data/local-ai/asgard/llamactl.sh"}
+
+extra_commands="status"
+start_cmd="${llama_ctl} start"
+stop_cmd="${llama_ctl} stop"
+restart_cmd="${llama_ctl} restart"
+status_cmd="${llama_ctl} status"
+
+run_rc_command "$@"

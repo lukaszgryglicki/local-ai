@@ -31,7 +31,7 @@ research). Sources: `research/qwen.md`, `research/non-qwen.md`,
 | iGPU | Intel UHD P630 (ANV): no coopmat, subgroup 8, memory = the same DDR4 | expected **negative** as a split target (competes with the CPU path for the same 40 GB/s, slower kernels than AVX2). One measurement only (§5 C) |
 | disk | zroot 4-way NVMe mirror, GELI. **`zroot/data/local-ai` is the model dataset** (swapped 2026-09-11 evening to mirror tuxi: `compression=off`, `primarycache=metadata`, recordsize/mountpoint inherited → `/data/local-ai`); `/data/ai` is a plain directory under `zroot/data` (zstd-13) like on tuxi | models go to `/data/local-ai/models/`; same reasoning as readme.md "ZFS: why the model has its own dataset". Loads are always `--load-mode none` here (§6 pinned cap), so `primarycache=metadata` only costs one sequential read per start |
 | thermal | PCH idles ~95 °C, 101–103 °C under I/O (trips 108/111/114); CPU 42 °C idle | watch `sysctl dev.cpu.0.temperature hw.acpi.thermal` during grids; thermal-watchdog is installed |
-| power | S3 works (`z` = `sudo zzz`); lid = display off/on only | stop llama-server before `z` — VRAM survival across S3 under nvidia/FreeBSD is untested (§6 rule 5) |
+| power | S3 works (`z` = `sudo zzz`); lid = display off/on only | **a server with GPU work in flight hangs forever after a resume** (fence wait, live test 2026-09-12 07:26, results-t1.md) → stop llama-server before your own `z`; the thermal watchdog's suspend does it automatically and restarts after (§6 rule 5, `ops.md`) |
 
 ## 2. Requirements (from Łukasz)
 
@@ -297,8 +297,13 @@ to the copy (`ggml_vk_ensure_sync_staging_buffer`), so any single
 4. `test-backend-ops` full run aborts at `MUL_MAT_ID_FUSION(f32, 128 experts,
    768×2048)` (768 MiB upload) — the driver cap, not a kernel bug; run with
    `-o` lists (§7 step 2).
-5. Untested: whether VRAM contents survive S3 (`zzz`) under nvidia on FreeBSD
-   — assume not; stop the server before `z`, restart after.
+5. S3 (`zzz`) with a request in flight: tested 2026-09-12 07:26 — the process
+   survives, the pending Vulkan fence never signals (TERM-immune hang, VRAM
+   held). Contract (`ops.md`): the owner stops/starts around a manual `z`;
+   the thermal watchdog's suspend action runs `unstick.sh pre-suspend` /
+   `post-resume` (stop first, restart after if it was running); `unstick.sh
+   fix|watch` is the stall detector the E2E harness runs. Idle-server VRAM
+   survival across S3 is still untested.
 6. Possible permanent fix (not done): make `ggml_vk_buffer_write_2d/read` in
    `ggml/src/ggml-vulkan/ggml-vulkan.cpp` loop over ≤ 128 MiB staging chunks
    (≈ 20 lines) — would retire rules 1–2 and make `mmap` loads work again;
@@ -365,6 +370,11 @@ edit-heavy turns.
 ## 8. Risks / open questions
 
 - **#15996** Vulkan+NVIDIA+FreeBSD hang — unverified on Turing; step 2 decides.
+- **S3 hang** (2026-09-12): handled — §1 power row / §6 rule 5 / `ops.md`; the
+  residual cost is the in-flight request plus a re-ingest of the session.
+- **02:09 hard freeze** (2026-09-12, GPU 89 % + turbo 4.7 GHz, new request at
+  113K ctx): cause unknown, no dump path (no swap); netdump over `em0` or the
+  BIOS event log are the owner's options (results-t1.md).
 - **GDN prefill on Vulkan is sequential** — could make 100K+ prompts crawl for
   every Qwen3.5+/Flash-Next hybrid; mitigation D.
 - **CPU clocks**: Turbo is off in BIOS → 2.4 GHz ceiling regardless of epp;

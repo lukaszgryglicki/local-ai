@@ -36,7 +36,7 @@ agent session costs ~0 (a few cents of electricity, 0 premium requests).
 | remote/ | yes | reference copies of the remote big-model server scripts: serve.sh, serve-new.sh (tuned, +MTP), serve-rpc.sh + start-rpc.sh (multi-node RPC, current production), rpc.md (step-by-step RPC runbook), qwen.sh, health.sh |
 | llama | yes | tiny launcher; libs load via RUNPATH from the POC build dir `/data/ai/local-agent-poc/src/llama.cpp/build-vulkan/bin` — keep that dir |
 | readme.md | yes | this file |
-| asgard/ | yes | **second box** (Dell Precision 7750: Xeon W-10885M, Quadro RTX 5000 16 GiB, 128 GiB DDR4, FreeBSD 15.1-STABLE): `asgard/plan.md` = hardware budget, tiered model shortlist (T-1/T0/T1/T2), configs, native Vulkan build incl. the clang-21 trap, test protocol, status; `asgard/research/*.md` = the raw research reports behind it (+ the `test-backend-ops` excerpt), `asgard/vkalloc.c` = the pinned-cap probe; **asgard variants of the scripts** (like local / remote / rpc before): `asgard/models.sh` (per-model file, HF rev, sha256, spec-type, cache-ram, sampling, thinking toggle), `asgard/serve.sh MODEL`, `asgard/download.sh MODEL`, `asgard/health.sh`, `asgard/qwen.sh` (`MODEL=…`), `asgard/bench.py`, `asgard/rust-test.sh MODEL` (the full test: qwen-code writes+tests a Rust string reverser, verified independently); `asgard/status-2026-09-11.md` = end-of-groundwork report, `asgard/results-t1.md` = T-1 download/test log |
+| asgard/ | yes | **second box** (Dell Precision 7750: Xeon W-10885M, Quadro RTX 5000 16 GiB, 128 GiB DDR4, FreeBSD 15.1-STABLE): `asgard/plan.md` = hardware budget, tiered model shortlist (T-1/T0/T1/T2), configs, native Vulkan build incl. the clang-21 trap, test protocol, status; `asgard/research/*.md` = the raw research reports behind it (+ the `test-backend-ops` excerpt), `asgard/vkalloc.c` = the pinned-cap probe; **asgard variants of the scripts** (like local / remote / rpc before): `asgard/models.sh` (per-model file, HF rev, sha256, spec-type, cache-ram, sampling, thinking toggle), `asgard/serve.sh MODEL`, `asgard/download.sh MODEL`, `asgard/health.sh`, `asgard/qwen.sh` (`MODEL=…`), `asgard/bench.py`, `asgard/rust-test.sh MODEL` (the full test: qwen-code writes+tests a Rust string reverser, verified independently); `asgard/ops.md` = **how llama-server is run** (start/stop, the `service llama` stub → `asgard/llamactl.sh`, thermal-watchdog suspend hooks, zzz/resume contract, stall detector — settled 2026-09-12); `asgard/start.sh` / `stop.sh` / `llamactl.sh` / `rc.d/llama` (stub source) / `unstick.sh` (stall detector + watchdog hooks) / `zzz-probe.sh` (S3 probe) / `sweep.sh`, `e2e-*.sh`, `verify-*.sh` (the spec/fit sweeps and the four-task E2E harness, see results-t1.md); `asgard/status-2026-09-11.md` = end-of-groundwork report, `asgard/results-t1.md` = T-1 download/test log |
 | model.gguf | no (.gitignore) | Qwen3-Coder-30B-A3B-Instruct Q8_0, 30.25 GiB |
 | key.secret | no (.gitignore) | API key the server requires and clients send |
 | remote-host.secret, remote-key.secret | no (.gitignore) | remote main node ssh target + its API key |
@@ -303,6 +303,23 @@ Serving on asgard: `asgard/serve.sh north` (or `qwen9b` / `gemma` /
 asgard/qwen.sh` adds the model's own sampling. All weights + 256K q8_0 KV in
 Quadro VRAM (`--gpu-layers 99 --device Vulkan0`, X on the iGPU).
 
+Running it (2026-09-12, settled in **`asgard/ops.md`**): `asgard/start.sh MODEL`
+(daemonizes serve.sh, waits for `/health`, remembers the start in
+`~/local-ai-runs/last-start.env`; `--last` replays it) / `asgard/stop.sh`, or the
+service form `sudo service llama start [MODEL]|stop|restart|status` —
+`/usr/local/etc/rc.d/llama` is a stub (`KEYWORD: nostart`, never in the boot
+sequence) whose commands call `asgard/llamactl.sh`, so only files in this repo
+change. Contract: **you** start/stop llama; a normal `zzz`/poweroff does nothing
+with it; **only the thermal watchdog's suspend action** stops the server right
+before S3 (TERM, KILL after 3 s) and restarts it after the resume if it was
+running (`asgard/unstick.sh pre-suspend` / `post-resume`, wired as
+`WD_SUSPEND_PRE/POST` in `thermal-policy.conf`); its power-off action stops
+nothing. `unstick.sh check|fix|watch|kill|show` is the stall detector (slot
+processing + GPU 0 % for 60 s → kill -9 + restart by provenance) that
+`asgard/e2e-test.sh` runs alongside every task, continuing the qwen session
+(`qwen -r SID`) after an API error. `asgard/zzz-probe.sh` is the S3 probe that
+found the hang. Log: `~/local-ai-runs/unstick/unstick.log` + syslog tag `unstick`.
+
 Rules learned on asgard:
 
 - **FreeBSD nvidia 595 Vulkan pinned-memory cap**: one host-visible
@@ -315,6 +332,21 @@ Rules learned on asgard:
   `--cache-ram 0` for models whose K or V per layer exceeds 255 MiB at the
   context size (Qwen3.5-9B, Gemma 4 at 262K; MoE 35B/North are fine).
   Details and the arithmetic: `asgard/plan.md` §6.
+- **S3 with GPU work in flight hangs llama-server for good** (live test
+  2026-09-12 07:26, `sudo zzz` mid-generation, resumed after 93 s): the process,
+  `/health` and `/slots` stay alive but the main loop sleeps forever in
+  `ggml_vk_wait_for_fence → libnvidia-eglcore poll()` on a fence submitted before
+  the suspend — GPU 0 % / 300 MHz, VRAM held, SIGTERM ignored (KILL needed), no
+  device-lost from the 595.99.02 driver, fresh Vulkan contexts work, the client
+  waits silently. Hence: **stop the server before your own `zzz`** (1–2 s;
+  ~6 s warm reload) — the thermal watchdog's suspend does that by itself
+  (`asgard/ops.md` §3); the in-flight request is lost either way and a deep
+  session re-ingests (128K ≈ 7 min with `--cache-ram 0`). Whether an *idle*
+  server's VRAM survives S3 is untested (`zzz-probe.sh pre/zzz/post`).
+- **`asgard/health.sh` sends a real completion** — never run it while a task
+  is in flight: with NP=1 it queues behind the task and then evicts its KV cache
+  (a 150K E2E context = ~7 min to re-ingest). `llamactl.sh status` (= `service
+  llama status`) and `unstick.sh` use only `/health`, `/props`, `/slots`.
 - **`--spec-type draft-mtp` only with `*-MTP-GGUF` files**: on a model
   without MTP layers llama-server exits at start (`failed to create MTP
   context`); use `ngram-mod` alone for North-Mini-Code / KAT-Coder / Gemma 4.
