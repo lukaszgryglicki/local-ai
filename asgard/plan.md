@@ -39,9 +39,13 @@ research). Sources: `research/qwen.md`, `research/non-qwen.md`,
    128K native + YaRN ×2 = 256K is *barely acceptable* and only if nothing
    native fits — currently moot, T0 fits natively).
 2. Fast: "hot" parts (attention, GDN, shared expert, embeddings, KV) in Quadro
-   VRAM; "cold" routed experts may live in RAM **only if** the result is at
-   most ~1.5–3× slower than the best all-VRAM layout.
-3. iGPU only if it does not cost orders of magnitude (it will — see C).
+   VRAM; "cold" routed experts may live outside the Quadro **only if** the
+   result is at most ~1.5–3× slower than the best all-VRAM layout.
+3. **Placement order when a model does not fit the Quadro (owner rule,
+   2026-09-12):** first try the Intel iGPU (Vulkan1, `IGPU_MOE=N` in serve.sh —
+   shared DDR4, but it is still a Vulkan device), and only as the *last*
+   resort plain CPU/RAM (`NCMOE=N`). Both are measured with sweeps at the same
+   N, never guessed; the faster one wins (§5 C).
 4. **Tiers (Łukasz's final definition, 2026-09-11):**
    - **T-1 — no compromises:** everything (weights, KV q8_0 @ 262 144,
      compute buffers) in the 16 GiB Quadro, native 256K, thinking, dev-focused;
