@@ -55,6 +55,8 @@ research). Sources: `research/qwen.md`, `research/non-qwen.md`,
      fits — currently moot). Still thinking + dev-focused.
    - **T1:** RAM-resident experts at ≤ 1.5–3× slower than the all-VRAM layout.
    - **T2:** the bigger-model experiment — experts in the 128 GiB, quality first.
+     **Status (owner, 12 Sep 11:23): kept as an option, decided at the very end** —
+     T1 is already at the edge of usability, so T2 only happens if T1 leaves room.
    **Tight fits are the goal** in every tier: fill 95–100 % of VRAM (largest
    quant / most expert layers that still load at ctx 262 144) — the last GiB
    is not a safety margin to keep.
@@ -361,7 +363,7 @@ to the copy (`ggml_vk_ensure_sync_staging_buffer`), so any single
    acceptance on a real agent turn, `nvidia-smi` VRAM, RSS, PCH/CPU/GPU °C.
    Order: A(Q4) → B(Q4) → epp/threads variants → C once → D only if pp is bad
    → A/B at Q8_0.
-6. T2: master build → `UD-IQ4_XS` (87 GiB ≈ 2.5 h at 10 MB/s) → B only
+6. T2 (optional — owner decides at the end, see §1): master build → `UD-IQ4_XS` (87 GiB ≈ 2.5 h at 10 MB/s) → B only
    (+ `--reasoning-effort medium`), same grid; MTP only after porting the
    remote node's qwen4exp patch or unsloth's fork.
 7. Pick: highest score whose tg@20K ≥ ⅓ of the A(Q4) result and ≥ 8 t/s raw;
@@ -400,3 +402,28 @@ ngram self-speculation is a free win (71–74 % acceptance); ONE client at a
 time with `--parallel 1`; never run GPU `llama-bench` on a box you cannot
 power-cycle remotely (asgard has GELI — a hang means a passphrase at boot);
 server-side DeviceLost just kills the server (safe to retry).
+
+## 10. Deliverable — three named serving profiles (owner statement, 2026-09-12 11:14)
+
+The research ends in **one `llamactl.sh`/`service llama` profile per tier**, each = the tier's
+*best model* (by the E2E coding tasks) in *its best configuration* (by the sweeps: NP, SPEC,
+threads, placement):
+
+| profile | tier | placement rule | **generation-speed goal** (owner, 11:20; output t/s, session aggregate) |
+|---|---|---|---|
+| `fastest-vram` | T-1 | everything in the Quadro (weights, 256K q8_0 KV, compute); the fastest model that passes the coding tasks | expect **> 12 t/s**, never **< 10**, ideal **15–25 t/s** |
+| `fast` | T0 | VRAM first, overflow to the **iGPU (Vulkan1) before CPU RAM** — whichever measures faster; no OOM, no "slow-token" regime | not slower than **6 t/s**, absolute minimum **4**, ideal **≥ 7–10 t/s** |
+| `best` | T1 (T2 optional — owner decides at the end; T1 is already at the edge of usability) | as much as fits across VRAM + iGPU + RAM, whichever split is fastest, for the best quality | expect **≥ 1.8 t/s**, absolute low **1 t/s** (below = unusable), ideal **> 3 t/s** |
+
+The goals are **first rough estimates** (owner, 11:24: "we will eventually adjust as research
+continues") and *soft recommendations for output tokens only* — input (prompt) speed is recorded but
+not a selection criterion. Measured as the aggregate generation rate over a whole E2E coding
+session (e.g. qwen9b C task: 14.6 t/s aggregate, 6.8 at 200K, 35 fresh), so a model must clear
+the floor at depth, not only at a fresh context.
+
+Order of work: finish T-1 (this file + `results-t1.md`) → STOP → T0 → T1 → T2 only if the owner still wants it at the end; the
+per-tier winner and its knobs get frozen into `models.sh`/`serve.sh` defaults and documented in
+`ops.md`. Speed factors recorded per model (from the E2E logs, not synthetic): incremental prompt
+t/s at depth, cold re-encode t/s (session resume / context compaction re-reads the whole history),
+generation t/s fresh vs at 100K/200K, and the compaction cost (qwen-code `autoCompactThreshold`
+0.95 → one full re-encode of ~200K tokens ≈ 20 min on qwen9b).
