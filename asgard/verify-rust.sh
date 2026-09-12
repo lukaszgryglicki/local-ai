@@ -32,7 +32,9 @@ cases = ["hello", "Zażółć gęślą jaźń", "a🚀b👍", "", "racecar", "  
 ok = bad = 0
 for s in cases:
     for tail in ("\n", ""):  # with and without the single trailing newline the spec says to strip
-        inp = (s + tail).encode(); want = (s[::-1] + "\n").encode()
+        t = s + tail; inp = t.encode()
+        t = t[:-1] if t.endswith("\n") else t  # the spec: read all stdin, strip ONE trailing newline, reverse, add newline
+        want = (t[::-1] + "\n").encode()
         try:
             r = subprocess.run([b], input=inp, capture_output=True, timeout=10); got = r.stdout
         except Exception as e:  # noqa: BLE001

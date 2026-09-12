@@ -9,9 +9,10 @@ if [ -f bignum/bignum.c ]; then P=bignum; elif [ -f bignum.c ]; then P=.; else
   echo "FILES MISSING: no bignum.c in ./bignum or ."; ls -laR . 2>/dev/null | grep -v "^total" | head -30; echo "VERDICT: FAIL (no project)"; exit 1
 fi
 cd "$P" || exit 1
-srcs=$(ls *.c 2>/dev/null | tr '\n' ' ')
-echo "project: $P/ (sources: $srcs; $(cat *.c *.h 2>/dev/null | wc -l | tr -d ' ') lines; Makefile: $( [ -f Makefile ] && echo yes || echo MISSING); targets: $(grep -oE '^(all|test|clean):' Makefile 2>/dev/null | tr -d ':' | tr '\n' ' '))"
-echo "malloc/free calls in source: $(grep -cE '\b(malloc|calloc|realloc)\(' *.c) / $(grep -c '\bfree(' *.c) | assert() uses: $(grep -c 'assert(' *.c) | fixed buffers > 1000: $(grep -cE '\[[0-9]{4,}\]' *.c)"
+srcs=bignum.c   # the spec's build command names bignum.c only; other *.c files are the model's scratch, reported but not built
+others=$(ls *.c *.h 2>/dev/null | grep -v '^bignum\.c$' | tr '\n' ' ')
+echo "project: $P/ (bignum.c $(wc -l < bignum.c | tr -d ' ') lines${others:+; other files left behind: $others}; Makefile: $( [ -f Makefile ] && echo yes || echo MISSING); targets: $(grep -oE '^(all|test|clean):' Makefile 2>/dev/null | tr -d ':' | tr '\n' ' '))"
+echo "malloc/free calls in bignum.c: $(grep -cE '\b(malloc|calloc|realloc)\(' bignum.c) / $(grep -c '\bfree(' bignum.c) | assert() uses: $(grep -c 'assert(' bignum.c) | fixed buffers >= 1000: $(grep -cE '\[[0-9]{4,}\]' bignum.c)"
 rm -f bignum bignum-asan *.o
 cc -std=c11 -Wall -Wextra -Werror -O2 -o bignum $srcs 2>strict.err && { echo "strict build (-Werror): ok"; strictok=1; } || { echo "strict build (-Werror): FAIL"; head -15 strict.err; strictok=0; }
 cc -std=c11 -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -o bignum-asan $srcs 2>asan-build.err && { echo "sanitizer build: ok"; asanb=1; } || { echo "sanitizer build: FAIL"; head -10 asan-build.err; asanb=0; }
@@ -65,4 +66,4 @@ else
 fi
 if [ "$strictok" = 1 ] && [ "$makeok" = 1 ] && [ "$makete" = 1 ] && [ "$selfok" = 1 ] && [ "$cmpok" = 1 ]; then echo "VERDICT: PASS"
 else echo "VERDICT: FAIL (strict=$strictok make=$makeok maketest=$makete selftest_asan=$selfok comparisons=$cmpok)"; fi
-for f in $srcs Makefile; do [ -f "$f" ] && { echo "-- $P/$f:"; cat "$f"; }; done
+for f in bignum.c Makefile; do [ -f "$f" ] && { echo "-- $P/$f:"; cat "$f"; }; done

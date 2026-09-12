@@ -13,7 +13,7 @@ RUNS=${LOCAL_AI_RUNS:-$HOME/local-ai-runs}; mkdir -p "$RUNS"
 CSV=${1:-$RUNS/telemetry.csv}
 GUARD_PCH=${GUARD_PCH:-102}
 EVENTS=${EVENTS:-$RUNS/guard.log}
-[ -s "$CSV" ] || echo "time,pch_c,core_max_c,cpu_max_mhz,cap_mhz,gpu_c,gpu_sm_mhz,gpu_w,gpu_util,gpu_throttle,server" > "$CSV"
+[ -s "$CSV" ] || echo "time,pch_c,core_max_c,cpu_max_mhz,cap_mhz,gpu_c,gpu_sm_mhz,gpu_w,gpu_util,gpu_throttle,server,acline,batt_pct,batt_state" > "$CSV"
 ncpu=$(sysctl -n hw.ncpu)
 while :; do
   pch=$(sysctl -n dev.pchtherm.0.temperature 2>/dev/null | cut -d. -f1)
@@ -32,7 +32,7 @@ while :; do
   else
     srv=0; g_c=; g_sm=; g_w=; g_u=; g_r=   # do not wake an idle GPU (nvidia-smi re-inits it at P0)
   fi
-  echo "$(date +%T),$pch,$cmax,$f,$cap,$g_c,$g_sm,$g_w,$g_u,$g_r,$srv" >> "$CSV"
+  echo "$(date +%T),$pch,$cmax,$f,$cap,$g_c,$g_sm,$g_w,$g_u,$g_r,$srv,$(sysctl -n hw.acpi.acline),$(sysctl -n hw.acpi.battery.life),$(sysctl -n hw.acpi.battery.state)" >> "$CSV"
   if [ "${pch:-0}" -ge "$GUARD_PCH" ] && [ "$srv" = 1 ]; then
     echo "$(date '+%F %T') GUARD PCH ${pch} C >= ${GUARD_PCH} C (core ${cmax} C, cap ${cap} MHz, gpu ${g_c} C ${g_w} W) -> stop.sh" | tee -a "$EVENTS"
     "$d/stop.sh" >> "$EVENTS" 2>&1

@@ -7,20 +7,29 @@
 # per-model sampling. MODEL = north | qwen9b | gemma | qwen35b (asgard/models.sh).
 # Env overrides: NP slots (default 1; ctx = NP x 256K unless CTX given), CTX, THREADS (8),
 # THREADS_BATCH (16), NCMOE (--n-cpu-moe, default per model), SPEC (--spec-type, default per
-# model; SPEC=none for raw decode speed), LOG, EXTRA (appended verbatim).
+# model; SPEC=none for raw decode speed), LOG, EXTRA (appended verbatim), IGPU_MOE=N (MoE expert weights
+# of the first N layers on the Intel iGPU = Vulkan1 instead of CPU RAM — the counterpart of NCMOE=N for the
+# "does not fit in VRAM" case; owner rule 2026-09-12: measure iGPU vs RAM with sweeps, do not guess),
+# DEV (--device, default Vulkan0), VKVIS (GGML_VK_VISIBLE_DEVICES, default 0).
 # Pinned-cap rules (plan §6): --load-mode none, never --check-tensors / GGML_VK_PREFER_HOST_MEMORY,
 # --cache-ram from models.sh, --spec-type from models.sh (draft-mtp only for *-MTP-GGUF files).
-# Stop the server before suspend (zzz) - VRAM survival across S3 is untested.
+# VRAM survival across S3 is untested; the thermal watchdog's suspend action leaves the server running on purpose.
 d=$(dirname "$(realpath "$0")")
 . "$d/models.sh"; model_env "${1:-north}" || exit 1
 B=/data/ai/local-agent-poc/src/llama.cpp/build-vulkan/bin/llama-server
 NP=${NP:-1}; CTX=${CTX:-$((262144 * NP))}
 n=${NCMOE:-$MODEL_NCMOE}; NCMOE_ARGS=; [ "$n" -gt 0 ] && NCMOE_ARGS="--n-cpu-moe $n"
 KW_ARGS=; [ -n "$MODEL_KWARGS" ] && KW_ARGS="--chat-template-kwargs $MODEL_KWARGS"
-export GGML_VK_VISIBLE_DEVICES=0
+DEV=${DEV:-Vulkan0}; VKVIS=${VKVIS:-0}; IGPU_ARGS=
+if [ "${IGPU_MOE:-0}" -gt 0 ]; then   # same tensors --n-cpu-moe N would pin to CPU, pinned to the iGPU instead
+  alt=$(i=0; sep=; while [ $i -lt "$IGPU_MOE" ]; do printf '%s%d' "$sep" $i; sep='|'; i=$((i+1)); done)
+  IGPU_ARGS="--override-tensor blk\.($alt)\.ffn_(up|down|gate)_exps\.weight=Vulkan1 --split-mode none --main-gpu 0"
+  DEV=Vulkan0,Vulkan1; VKVIS=0,1
+fi
+export GGML_VK_VISIBLE_DEVICES=$VKVIS
 exec "$B" --model "$d/../models/$MODEL_FILE" --alias "$MODEL_ALIAS,qwen3coder-local" \
   --host 10.253.254.1 --port 18080 \
-  --ctx-size "$CTX" --parallel "$NP" --gpu-layers 99 --device Vulkan0 --fit off $NCMOE_ARGS \
+  --ctx-size "$CTX" --parallel "$NP" --gpu-layers 99 --device "$DEV" --fit off $NCMOE_ARGS $IGPU_ARGS \
   --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --cache-ram "$MODEL_CACHE_RAM" \
   --batch-size 2048 --ubatch-size 1024 --threads "${THREADS:-8}" --threads-batch "${THREADS_BATCH:-16}" \
   --load-mode none --ctx-checkpoints 8 \
