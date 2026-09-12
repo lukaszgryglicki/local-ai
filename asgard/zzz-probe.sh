@@ -6,6 +6,8 @@
 #   task [TAG]  start a small headless qwen-code task (detached, /data/ai/zzz-task-MODEL) and wait until the server is
 #               generating for it - the suspend then hits a live GPU job, which is what the thermal watchdog would do
 #   zzz         sudo zzz (S3), detached so this ssh session returns before the box sleeps
+#   state       just the state line (safe during a running task: no request is sent)
+#   ref NAME    the deterministic answer under any name; cmp A B compares two of them (e.g. after a clean restart)
 #   post [TAG]  after resume: same pid?, dmesg resume lines, /health, the same deterministic answer -> TAG-post.*, byte
 #               diff against TAG-pre.txt (identical = VRAM content survived S3), and what happened to the small task
 # Do not run pre/task while an E2E task is in flight: with --parallel 1 any request evicts that task's KV cache.
@@ -39,6 +41,9 @@ EOF
 }
 
 case ${1:-} in
+  state) state ;;
+  ref) ref "${2:-ref-$(date +%H%M%S)}"; echo "saved: $R/${2:-ref-*}.{json,txt}" ;;   # reference answer under any name
+  cmp) cmp -s "$R/$2.txt" "$R/$3.txt" && echo "IDENTICAL: $2 vs $3" || { echo "DIFFER: $2 vs $3"; diff "$R/$2.txt" "$R/$3.txt" | head -20; } ;;
   pre)
     state | tee "$R/$TAG-pre.state"; ref pre | tee -a "$R/$TAG-pre.state"; echo "saved: $R/$TAG-pre.*" ;;
   task)

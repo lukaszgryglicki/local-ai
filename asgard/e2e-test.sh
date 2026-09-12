@@ -7,6 +7,10 @@
 # log slice written during the run.
 # Output (preserved): /data/ai/TASK-task-MODEL/{qwen.log,health.txt,summary.txt,per-request.txt,+ the model's project};
 # a previous run is kept as /data/ai/TASK-task-MODEL.prev-<timestamp>. summary.txt is also printed.
+# RESUME=SESSION-UUID e2e-test.sh MODEL TASK continues an interrupted run (server restart, suspend, crash) in the existing
+# directory: qwen.sh -r UUID with a short "continue" nudge (RESUME_PROMPT), output appended to qwen.log, the previous
+# summary.txt/per-request.txt kept as *.prev-<timestamp>; the server-side timings of the new summary cover only the
+# resumed part, the qwen stream summary (tool calls) the whole log. Session id: the "session_id" field in qwen.log.
 d=$(dirname "$(realpath "$0")")
 M=${1:-north}; T=${2:-rust}
 . "$d/e2e-tasks.sh"
@@ -14,18 +18,26 @@ PROMPT=$(e2e_prompt "$T") || exit 1
 W=/data/ai/$T-task-$M
 RUNS=${LOCAL_AI_RUNS:-$HOME/local-ai-runs}
 LOG=${LOG:-$RUNS/llama.log}
-[ -d "$W" ] && mv "$W" "$W.prev-$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$W"; cd "$W" || exit 1
+QARGS=""
+if [ -n "${RESUME:-}" ]; then
+  cd "$W" 2>/dev/null || { echo "nothing to resume in $W"; exit 1; }
+  ts=$(date +%Y%m%d-%H%M%S); for f in summary per-request; do [ -f $f.txt ] && mv $f.txt "$f.prev-$ts.txt"; done
+  PROMPT=${RESUME_PROMPT:-"The model server was restarted and your last request failed with a connection error; nothing on disk was lost. Continue the original task exactly where you left off."}
+  QARGS="-r $RESUME"; STDIN=/dev/null
+else
+  [ -d "$W" ] && mv "$W" "$W.prev-$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$W"; cd "$W" || exit 1
+fi
 "$d/health.sh" > health.txt 2>&1 || { cat health.txt; echo "server not healthy - aborting"; exit 1; }
-STDIN=$(e2e_prepare "$T" "$W") || { echo "task preparation failed"; exit 1; }
+[ -n "$QARGS" ] || { STDIN=$(e2e_prepare "$T" "$W") || { echo "task preparation failed"; exit 1; }; }
 [ -n "$STDIN" ] || STDIN=/dev/null
 off=$(stat -f %z "$LOG" 2>/dev/null || echo 0)
 t0=$(date +%s)
-MODEL=$M timeout 14400 "$d/qwen.sh" --yolo -o stream-json "$PROMPT" < "$STDIN" > qwen.log 2>&1
+MODEL=$M timeout 14400 "$d/qwen.sh" --yolo -o stream-json $QARGS "$PROMPT" < "$STDIN" >> qwen.log 2>&1
 rc=$?
 t1=$(date +%s)
 {
-echo "== e2e-test $M $T  $(date)  qwen rc=$rc  wall=$((t1 - t0)) s  stdin=$( [ "$STDIN" = /dev/null ] && echo none || wc -c < "$STDIN" | tr -d ' ' ) bytes"
+echo "== e2e-test $M $T ${RESUME:+(resumed $RESUME) } $(date)  qwen rc=$rc  wall=$((t1 - t0)) s  stdin=$( [ "$STDIN" = /dev/null ] && echo none || wc -c < "$STDIN" | tr -d ' ' ) bytes"
 cat health.txt
 echo "== server-side timings for this run (log slice):"
 python3 - "$LOG" "$off" per-request.txt <<'EOF'
