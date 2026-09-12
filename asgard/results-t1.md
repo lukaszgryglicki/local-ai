@@ -493,7 +493,20 @@ So **NP=1 at 262K**, like North and qwen9b — nothing in T-1 fits two 262K slot
 
 ### Full test — the four-task E2E (`e2e-all.sh gemma`, 15:08–, `SPEC=ngram-mod`, NP=1, ctx 262 144)
 
-GEMMA_E2E
+| task | wall | turns | requests (≥1K-tok batches) | prompt tok (pp) | gen tok | tg t/s agg (min–max) | ctx max | ngram acc. | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| rust | 274 s | 12 | 9 (2) | 27 529 (22 461 @ 592 t/s) | 6 206 | 37.1 (25.5–58.9) | 31.8K | 37.0 % | **PASS 18/18** round-trips (with/without trailing newline), 48-line `main.rs`, 4 unit tests pass, `chars().rev()`, no unsafe — the first PASS on the easy task |
+| go | 161 s | 10 | 6 (0) | 23 042 (599 t/s) | 1 555 | 55.8 (30.7–85.9) | 28.8K | 66.2 % | **FAIL-task 46/47** — the North failure exactly: `bufio.Scanner` line loop → `bufio.Scanner: token too long`, rc=1 on the 6 MB single-line input; vet/build/test clean, 216 lines, 2 test funcs, tokenizer/ordering/`-n`/exit codes all right |
+| c | 2 142 s (36 min) | 20 | 18 (2) | 50 330 (309 t/s) | 71 905 | 36.8 (19.7–57.7) | 80.2K | 44.1 % | **FAIL-task**: 329-line `bignum.c` + Makefile, `-Werror` and ASan builds clean, but `make test` target broken, `--selftest` trips its own `assert(bignum_compare(a, b) == 0)` (line 168), and every expression double-frees in `bignum_free` (ASan) → 0/420 vectors; malformed-line and empty-input handling right. Ended by qwen-code's loop detector (identical tool call repeated) at turn 20 — the model's loop, not ours |
+| asm | 2 353 s (39 min) | 24 | 22 (1) | 82 628 (81 181 @ 246 t/s) | 55 936 | 30.3 (25.2–36.0) | 141.8K | 54.8 % | **FAIL-task**: 297-line `b64.s` that **never assembled** (`(%rsi+1)` addressing, `add` register-type mismatches ×6) — the model made **23 `write_file` calls and not one shell command** in 24 turns, so it never saw `as` fail; Makefile/test.sh written, `make` FAIL, 0/700 |
+
+**gemma after four tasks**: 1 PASS (rust — the only model to pass the easy task), 3 FAIL-task (go 46/47 with the same
+`bufio.Scanner` mistake as North; C: double-free in every expression, loop-detector stop; asm: never ran the assembler).
+Fastest T-1 candidate by a wide margin — **30–56 t/s aggregate per task, 25 t/s worst request even at 142K context** —
+and the first full run on the patched build: 141.8K max context, zero FAIL-infra, zero restarts (the two > 131K
+tasks would have been the risk zone with an MTP draft; gemma has none). Behaviour: fast, tidy, blind — it writes files
+and moves on without running the build/tests (asm: 0 shell calls; C: kept its own failing selftest); the one thing
+North/qwen9b did more of (looping on tool output) it does less, which is why it is quick and why it misses the last mile.
 
 ## E2E tasks — the four-task suite (`e2e-tasks.sh`, `e2e-test.sh`, `e2e-all.sh`, `verify-*.sh`)
 
