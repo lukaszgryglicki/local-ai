@@ -7,7 +7,10 @@
 # per-model sampling. MODEL = north | qwen9b | gemma | qwen35b (asgard/models.sh).
 # Env overrides: NP slots (default 1; ctx = NP x 256K unless CTX given), CTX, THREADS (8),
 # THREADS_BATCH (16), NCMOE (--n-cpu-moe, default per model), SPEC (--spec-type, default per
-# model; SPEC=none for raw decode speed), LOG, EXTRA (appended verbatim), IGPU_MOE=N (MoE expert weights
+# model; SPEC=none for raw decode speed), DRAFT_KV (KV type of the MTP draft context, default q8_0: with the f16
+# default the context-checkpoint read-back of the draft KV is one 2 KiB/token pinned buffer, and pinned allocations
+# > 256 MiB fail on this GPU/driver -> llama-server SIGABRT at ~128K+ contiguous tokens, 2026-09-12 12:21 and 12:43),
+# LOG, EXTRA (appended verbatim), IGPU_MOE=N (MoE expert weights
 # of the first N layers on the Intel iGPU = Vulkan1 instead of CPU RAM — the counterpart of NCMOE=N for the
 # "does not fit in VRAM" case; owner rule 2026-09-12: measure iGPU vs RAM with sweeps, do not guess),
 # DEV (--device, default Vulkan0), VKVIS (GGML_VK_VISIBLE_DEVICES, default 0).
@@ -37,6 +40,7 @@ exec "$B" --model "$d/../models/$MODEL_FILE" --alias "$MODEL_ALIAS,qwen3coder-lo
   --batch-size 2048 --ubatch-size 1024 --threads "${THREADS:-8}" --threads-batch "${THREADS_BATCH:-16}" \
   --load-mode none --ctx-checkpoints 8 \
   --spec-type "${SPEC:-$MODEL_SPEC}" --spec-draft-n-max 6 --spec-draft-p-min 0.75 \
+  --spec-draft-type-k "${DRAFT_KV:-q8_0}" --spec-draft-type-v "${DRAFT_KV:-q8_0}" \
   --jinja --reasoning on --reasoning-budget -1 $KW_ARGS \
   --temp "$MODEL_TEMP" --top-p "$MODEL_TOP_P" --top-k "$MODEL_TOP_K" --min-p "$MODEL_MIN_P" --repeat-penalty 1.0 \
   --no-mmproj --no-ui --no-agent --offline --timeout 43200 --api-key-file "$d/../key.secret" \

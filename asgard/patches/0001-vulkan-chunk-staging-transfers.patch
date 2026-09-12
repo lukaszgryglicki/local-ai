@@ -1,0 +1,49 @@
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+index a04a6b2..9a6d64d 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -8625,9 +8625,14 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void *
+     }
+ }
+ 
++static size_t ggml_vk_staging_chunk();   // asgard patch, defined above ggml_vk_buffer_read
+ static void ggml_vk_buffer_write(vk_buffer& dst, size_t offset, const void * src, size_t size) {
+     VK_LOG_DEBUG("ggml_vk_buffer_write(" << size << ")");
+-    ggml_vk_buffer_write_2d(dst, offset, src, size, size, size, 1);
++    const size_t chunk = ggml_vk_staging_chunk();
++    for (size_t done = 0; done < size; done += chunk) {
++        const size_t n = std::min(chunk, size - done);
++        ggml_vk_buffer_write_2d(dst, offset + done, (const uint8_t *) src + done, n, n, n, 1);
++    }
+ }
+ 
+ static bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size_t offset, void * dst, size_t spitch, size_t dpitch, size_t width, size_t height, bool sync_staging = false) {
+@@ -8762,9 +8767,27 @@ static void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, si
+     }
+ }
+ 
++// asgard patch (2026-09-12): the NVIDIA FreeBSD driver (595.99.02, Quadro RTX 5000) refuses any single host-visible
++// allocation >= 256 MiB (255 MiB ok, 256 MiB -> ErrorOutOfDeviceMemory; the total is unlimited). The sync staging
++// buffer is sized to the largest single transfer, so a context-checkpoint read-back of a >= 128K-token f16 KV slice
++// (2 KiB/token) aborted llama-server. Large transfers now go through the staging buffer in chunks
++// (default 64 MiB, GGML_VK_STAGING_CHUNK_MB overrides).
++static size_t ggml_vk_staging_chunk() {
++    static size_t chunk = 0;
++    if (chunk == 0) {
++        const char * env = getenv("GGML_VK_STAGING_CHUNK_MB");
++        chunk = (env && atoi(env) > 0 ? (size_t) atoi(env) : 64) * 1024 * 1024;
++    }
++    return chunk;
++}
++
+ static void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_t size) {
+     VK_LOG_DEBUG("ggml_vk_buffer_read(" << src->buffer << ", " << offset << ", " << size << ")");
+-    ggml_vk_buffer_read_2d(src, offset, dst, size, size, size, 1);
++    const size_t chunk = ggml_vk_staging_chunk();
++    for (size_t done = 0; done < size; done += chunk) {
++        const size_t n = std::min(chunk, size - done);
++        ggml_vk_buffer_read_2d(src, offset + done, (uint8_t *) dst + done, n, n, n, 1);
++    }
+ }
+ 
+ static void ggml_vk_buffer_copy_async(vk_context& ctx, vk_buffer& dst, size_t dst_offset, vk_buffer& src, size_t src_offset, size_t size) {

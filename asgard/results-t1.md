@@ -309,6 +309,51 @@ short tool-call turns run 17–34 t/s instead of North's 13–22; the price is t
 
 **qwen9b after three tasks**: 1 PASS (go, the medium task — North failed it), 2 FAIL (rust: reads stdin line by line; C: 5.5 h of persistent but unproductive debugging). The C session is the important data point for the T-1 decision: the model *does* debug for hours without giving up or faking a selftest (317 real tool calls, 95 edits, 153 shell runs), but past ~100K context it loses the thread — it rewrote the parser three times, littered the code with `fprintf(stderr, "DEBUG…")` it never removed, and ended with a binary that prints nothing. Its own "done" claim at 07:34 (rc=0 after 91 min) was false. Speed over the whole C session: **17.8 t/s aggregate generation** (29.7 while fresh, 14.3 over the 4-h resume, single requests down to 6.9 at 229K), prompt 152–195 t/s aggregate, and two cold re-encodes (session resume 8 min, compaction 20.5 min) that cost 13 % of the wall time. Against the owner's T-1 goal (> 12 t/s, never < 10, ideal 15–25): inside the band as a session aggregate, at the floor for individual deep-context turns.
 
+### FAIL-infra 12:21 + 12:43 CEST — llama-server SIGABRT ×2 during the qwen9b asm task (256 MiB pinned-allocation cap)
+
+- `pid 55179 (llama-server) … exited on signal 6` (kernel log 12:21:41), 35 min into the asm task (13 tool calls, ~99K
+  context), while processing a 3 758-token prompt batch; the last server log line is
+  `erasing old context checkpoint (pos_min = 21168, … size = 133.427 MiB)` (Qwen3.5's recurrent-state checkpoints,
+  `--ctx-checkpoints 8`). No thermal event (PCH 67 °C, GPU 72 °C, only turbo-band caps at 11:24), no stall (the
+  detector logged "not stuck" every 30 s until "no server" at 12:21:46), VRAM was 15 337/16 384 MiB as always.
+- **The abort message is lost**: `start.sh` daemonized without `-o`, so GGML_ASSERT/Vulkan text went to /dev/null, and
+  `kern.coredump=0`. Fixed for the future: `daemon -o ~/local-ai-runs/serve.out` (+ previous logs archived in
+  `~/local-ai-runs/logs/`). If it happens again the message will be there; the C task ran the same server config
+  for 5.5 h to 229K without it, so it is not a deterministic depth limit.
+- Recovery: nobody restarts a *crashed* server (the stall detector only replaces hung ones; the owner rule keeps
+  everything else manual), so the harness waited from 12:23 until the server was started by hand at 12:34:20 and then
+  resumed the session itself (`qwen -r e9a89c46…`, 12:34:29, ~99K cold re-encode at ~1 000 t/s). Now `e2e-test.sh`
+  brings a vanished server back once per resume via `start.sh --last` (only during a task). Downtime (690 s) is
+  excluded from the task wall time; the verdict stays a model verdict.
+- Also found: the resume command passed the session id twice (`${sid:--c}`), so the nudge prompt carried a UUID
+  prefix (here and in the C resume) — harmless, fixed.
+- **Second abort 12:43** (pid 78430, 9 min after the restart, first new request after the 130 017-token re-encode) — this
+  time `serve.out` has it: `Terminating due to uncaught exception 'vk::Device::allocateMemory: ErrorOutOfDeviceMemory'`,
+  `ggml_vulkan: Memory allocation of size 269924352 failed.`, backtrace `llama_io_write_host::~llama_io_write_host` ←
+  `llama_context::state_seq_get_data` ← `common_prompt_checkpoint::update_dft` ← `server_context_impl::create_checkpoint`.
+  Root cause, confirmed with a 40-line Vulkan probe (`vkAllocateMemory` on every host-visible memory type of the Quadro):
+  **the NVIDIA FreeBSD driver (595.99.02) refuses any single host-visible allocation ≥ 256 MiB** (255 MiB ok, 256 MiB →
+  `ErrorOutOfDeviceMemory`; the *total* is unlimited — 64 × 128 MiB succeed; the 246 MiB BAR heap caps at 128 MiB).
+  ggml's Vulkan backend sizes its pinned *staging buffer* to the largest single tensor read (`ggml_vk_buffer_read` →
+  `ggml_vk_ensure_sync_staging_buffer(size)`, no chunking), and a context checkpoint reads the MTP draft context's KV
+  (plain `llama_kv_cache` of the nextn layer, ignores `PARTIAL_ONLY`; f16 = 4 KV heads × 256 × 2 B = **2 048 B/token** per
+  K or V) as one slice per contiguous cell range: 269 924 352 B = 131 799 tokens × 2 048 — the first checkpoint past
+  131 072 tokens on a fresh, unfragmented context. Same cap behind the `Failed to allocate pinned memory` warning at every
+  load. The main-context checkpoints (133 MiB, recurrent state) are safe. There is **no runtime knob**: the env knobs
+  (`GGML_VK_FORCE_MAX_ALLOCATION_SIZE`, `GGML_VK_SUBALLOCATION_BLOCK_SIZE`, `GGML_VK_ALLOW_SYSMEM_FALLBACK`) only shape
+  *device* buffers, and upstream master (checked 12 Sep) still has the unchunked read.
+- Mitigations, in order of deployment: (1) `DRAFT_KV=q8_0` is now the serve.sh default (`--spec-draft-type-k/-v`;
+  1 088 B/token → the cap moves to ≈247K tokens; `q4_0` would clear the whole 262K window) — first used by the next
+  server start; (2) `patches/0001-vulkan-chunk-staging-transfers.patch` makes `ggml_vk_buffer_read/_write` go through
+  the staging buffer in ≤ 64 MiB pieces (`GGML_VK_STAGING_CHUNK_MB`), semantically identical, built by
+  `build-vulkan-2.sh` into a separate build dir when the GPU is idle, then validated with `GGML_VULKAN_MEMORY_DEBUG=1`
+  on a > 131K-token checkpoint scenario before `serve.sh` switches to it. The 13:06 restart with
+  `GGML_VK_ALLOW_SYSMEM_FALLBACK=1` survived a 132 861-token re-encode with f16 draft KV; that flag is *not* on the
+  staging code path and the process holds all 15 439 MiB in VRAM, so the survival is unexplained (the draft's cell
+  layout evidently left every slice < 256 MiB) — the validation run will log the real staging sizes.
+- Downtime: 690 s + 1 381 s, excluded from the asm wall time; the 12:43 recovery was manual too (the harness that runs
+  the asm task predates the auto-restart). Verdict stays a model verdict.
+
 ### Outage 02:09 CEST (2026-09-12) — hard freeze, not thermal
 
 Forensics after the owner power-cycled the box at 05:55:

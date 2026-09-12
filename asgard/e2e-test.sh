@@ -47,14 +47,23 @@ MODEL=$M timeout 14400 "$d/qwen.sh" --yolo -o stream-json $QARGS "$PROMPT" < "$S
 rc=$?
 while [ "$resumes" -lt "${E2E_RESUMES:-3}" ] && api_error; do   # self-heal: wait for the server, continue the session
   resumes=$((resumes + 1)); td=$(date +%s); sid=$(last_result | sed -n 's/.*"session_id":"\([0-9a-f-]*\)".*/\1/p')
+  if [ -n "$sid" ]; then ropt=-r; rarg=$sid; else ropt=-c; rarg=; fi   # (until 12:35 ${sid:--c} passed the sid twice: a UUID prefixed the nudge)
   echo "$(date '+%F %T') resume $resumes: $(last_result | sed -n 's/.*"result":"\(\[API Error[^"]\{0,120\}\).*/\1/p') - waiting for the server (max ${E2E_WAIT_UP:-1800} s)" >> resume.log
   up() { curl -s -m 5 http://10.253.254.1:18080/health 2>/dev/null | grep -q '"ok"'; }   # /health only: no request, keeps a live KV cache
-  w=0; until up; do sleep 30; w=$((w + 30)); [ "$w" -ge "${E2E_WAIT_UP:-1800}" ] && break; done
+  # a server that is *gone* (crashed - e.g. SIGABRT 2026-09-12 12:21 during the qwen9b asm task) is brought back once per
+  # resume via start.sh --last (only if the last start was start.sh's); a hung one is handled by unstick.sh watch above
+  w=0; restarted=0; until up; do
+    sleep 30; w=$((w + 30)); [ "$w" -ge "${E2E_WAIT_UP:-1800}" ] && break
+    if [ "$restarted" = 0 ] && [ "$w" -ge 60 ] && [ -f "$RUNS/last-start.env" ] && [ -z "$(sockstat -4l -p 18080 2>/dev/null | awk 'NR>1 && $2 ~ /^llama/')" ]; then
+      restarted=1; echo "$(date '+%F %T') no llama-server on :18080 (crashed?) - $(dmesg | grep "llama-server" | tail -1 | cut -c1-120) - restarting via start.sh --last" >> resume.log
+      "$d/start.sh" --last >> resume.log 2>&1 || echo "$(date '+%F %T') start.sh --last failed (rc $?)" >> resume.log
+    fi
+  done
   downtime=$((downtime + $(date +%s) - td))
   up || { echo "$(date '+%F %T') server still down after $w s - giving up" >> resume.log; break; }
   if [ "$(stat -f %i "$LOG" 2>/dev/null)" != "$ino" ]; then slices="$LOG.prev:$off $LOG:0"; ino=$(stat -f %i "$LOG"); off=0; fi   # log rotated by start.sh
-  echo "$(date '+%F %T') server back after $(($(date +%s) - td)) s, qwen ${sid:+-r $sid}${sid:--c}" >> resume.log
-  MODEL=$M timeout 14400 "$d/qwen.sh" --yolo -o stream-json ${sid:+-r "$sid"} ${sid:--c} "$NUDGE" < /dev/null >> qwen.log 2>&1
+  echo "$(date '+%F %T') server back after $(($(date +%s) - td)) s, qwen $ropt $rarg" >> resume.log
+  MODEL=$M timeout 14400 "$d/qwen.sh" --yolo -o stream-json $ropt ${rarg:+"$rarg"} "$NUDGE" < /dev/null >> qwen.log 2>&1
   rc=$?
 done
 t1=$(date +%s); [ -n "${UW:-}" ] && kill "$UW" 2>/dev/null

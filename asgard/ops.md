@@ -9,12 +9,18 @@ touches it automatically". Everything llama-side lives in this repo (`/data/loca
    two watchdog-conf lines) only point here and are not expected to change again during the research phase.
 2. **The owner starts and stops llama-server.** A normal `zzz` (`z`), lid close, reboot or poweroff issued by the owner
    does nothing with llama. (Mind §4: a server with a request in flight does not survive S3 — stop it first, or let the
-   E2E stall detector replace it afterwards.)
+   E2E stall detector replace it afterwards.) During an E2E task the harness keeps its server alive: a hung one is
+   replaced (`unstick.sh watch`), a crashed one is started again (`start.sh --last`) — outside a task, nothing is.
 3. **Only the thermal watchdog's *suspend* action touches it automatically**: right before its S3 request it stops
    the server (TERM, KILL after 3 s, hard limit 15 s) and remembers that it was running; after the resume it starts it
    again the same way — only if it was running. The watchdog's *power-off* action stops nothing (no waiting).
 4. **The service is never in the boot sequence** while we research (`KEYWORD: nostart`). `/usr/local/etc/rc.d/llama`
    is a stub whose four commands call `asgard/llamactl.sh`; that script is the service.
+
+- **Driver limit (proven 12 Sep):** the NVIDIA FreeBSD driver rejects any single host-visible (pinned) Vulkan allocation
+  ≥ 256 MiB. Anything that makes ggml read or write one tensor slice ≥ 256 MiB in one go (context checkpoints of a
+  large f16 draft KV, `--cache-ram` slot saves of huge contexts, …) aborts an unpatched llama-server. Keep
+  `DRAFT_KV=q8_0`/`q4_0` and run the patched build (`build-vulkan-2`) once validated.
 
 ## 1. What lives where
 
@@ -126,6 +132,10 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
 | 11:44 | `service llama status` / `stop` with the hand-started server | **caught**: status said "not running" next to `health: ok`, `stop` said "no pidfile" and left it running → `stop.sh`, `llamactl.sh` now fall back to the port owner (`sockstat`), `unstick.sh restart` added, `llamactl.sh restart` uses it for hand-started servers |
 | 11:45 | `service llama status` → `restart` → `stop` → `status`, hand-started server | status: "started by hand, no pidfile" + argv; restart: identical relaunch, TERM 2.1 s, UP in 6 s (8.4 s total); stop: "stopped pid … listening on :18080 (started by hand)", VRAM 0; status: "not running (no live pid …, nothing listening on :18080)" |
 | 11:46 | `service llama start` (no MODEL) → `start` again → `restart` → `unstick.sh check`, `start.sh` provenance | start: replayed `qwen9b NP=1`, UP in 6 s; second start: "already running: pid … via start.sh"; restart: stop.sh + replay, 9.1 s total, pidfile updated; check: ok |
+| 12:21 | **llama-server SIGABRT mid-task** (qwen9b asm, ~99K ctx) — not stuck, not thermal | abort text lost (no `daemon -o`, `kern.coredump=0`) → `start.sh` now logs stderr to `~/local-ai-runs/serve.out` and archives old logs in `~/local-ai-runs/logs/`; nobody restarted it (by design: only hung servers were replaced) → `e2e-test.sh` now restarts a vanished server once per resume via `start.sh --last`, task-time only; hand restart 12:34:20, session resumed by the harness 12:34:29 |
+| 12:43 | **second SIGABRT** 9 min after the restart, first request after a 130K re-encode — `serve.out` caught it: `vk::Device::allocateMemory: ErrorOutOfDeviceMemory`, `Memory allocation of size 269924352 failed`, in `create_checkpoint` → `update_dft` → `state_seq_get_data` (Vulkan staging buffer for a 131 799-token f16 draft-KV slice) | root cause proven with a Vulkan probe: the NVIDIA FreeBSD driver rejects any **single host-visible allocation ≥ 256 MiB** (255 ok, total unlimited); no runtime knob exists (device-buffer knobs only, upstream master unchunked). Hand restart 13:06:2x `NP=1 GGML_VK_ALLOW_SYSMEM_FALLBACK=1 ./start.sh qwen9b`, harness resumed 13:06:28 (downtime 1 381 s, excluded). Flag is not on that code path, so its "success" is coincidence; kept only for this run |
+| 13:10 | `serve.sh`: `DRAFT_KV=q8_0` default (`--spec-draft-type-k/-v`, 1 088 B/token → cap ≈ 247K tokens; `q4_0` clears 262K); `start.sh --last` persists `DRAFT_KV` and `GGML_VK_ALLOW_SYSMEM_FALLBACK` | takes effect at the next server start (pid 87550 still runs f16 draft KV) |
+| 13:40 | `patches/0001-vulkan-chunk-staging-transfers.patch` (chunked `ggml_vk_buffer_read/_write`, ≤ 64 MiB pieces, `GGML_VK_STAGING_CHUNK_MB`) applied to `/data/ai/local-agent-poc/src/llama.cpp` (working tree, not built); `build-vulkan-2.sh` builds it into `build-vulkan-2/` | build + validation (`GGML_VULKAN_MEMORY_DEBUG=1`, > 131K-token checkpoint scenario, f16 draft KV, flag unset) only when no E2E task runs; then `serve.sh B=` → `build-vulkan-2/bin`, keep `build-vulkan` as fallback |
 
 ## 7. At the real end (when the research phase is over)
 
