@@ -62,8 +62,12 @@ sudo service llama stop
 
 Knobs travel only through the environment of the user's shell (`sudo`/`su -l` drop them): start by hand with knobs,
 then `service llama restart` replays them (`last-start.env`). Never two servers: `start.sh` refuses when the pidfile is
-alive; a server started without `start.sh` (plain `serve.sh`, `daemon`) is still found by `unstick.sh`/`show` via its
-port, but `start.sh`/`stop.sh`/`llamactl.sh` do not know it.
+alive. **A server started without `start.sh`** (plain `daemon -f ./serve.sh …`, no pidfile) **is found by its port**
+(`sockstat :18080`) by everything: `service llama status` reports it ("started by hand, no pidfile" + its argv),
+`stop` stops it, `restart` relaunches it *identically* (argv/env/cwd/binary read from the kernel, `unstick.sh restart`),
+and the watchdog hooks handle it the same way (verified 11:43, §6). `start` with a hand-started server running says
+"already running" and does nothing. The one thing a hand-started server lacks is `last-start.env`, so a later
+`service llama start` (after a `stop`) replays the last *`start.sh`* configuration, not the hand-started one.
 
 ## 3. The thermal watchdog and llama — the only automatic path
 
@@ -117,7 +121,11 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
 | 08:05–08:18 | stub rc.d + `llamactl.sh status` as root and as user; `rcorder` lists | works; `llama` absent from boot (`-s nostart`), suspend and shutdown orders; `llama_s3` (interim devd hook) removed |
 | 08:16 | watchdog mock (3 variants, §3) | as specified |
 | 08:18 | `unstick.sh post-resume` with no state file (root) | "no server was running before the suspend - nothing to do" |
-| pending | real hook cycle on an idle server: `sudo unstick.sh pre-suspend` → `post-resume` (start.sh provenance), then the same with a hand-started server (relaunch provenance); `service llama stop`/`start` | between the C and asm E2E tasks — see results-t1.md |
+| 11:41 | **live hook cycle, `start.sh` server** (pid 38939, idle): `sudo unstick.sh pre-suspend` → `post-resume` | pre: TERM ok in 2.9 s, state file written, pidfile removed; post: `start.sh --last` replayed `qwen9b NP=1`, UP in 6 s (pid 81235), state file gone. Bug found+fixed: `WHEN=<date time>` was unquoted in the state file → `. state` failed on the time ("11:41:50: not found"), now every value is single-quoted |
+| 11:42 | **live hook cycle, hand-started server** (`NP=1 daemon -f ./serve.sh qwen9b`, no pidfile) → `show` → `pre-suspend` → `post-resume` | `show`: provenance `relaunch`, launcher written; pre: TERM ok; post: relaunched identically as lgryglicki, UP in 6 s — 72/72 argv tokens identical, same env keys, cwd `/data/local-ai/asgard`, still no pidfile (provenance preserved) |
+| 11:44 | `service llama status` / `stop` with the hand-started server | **caught**: status said "not running" next to `health: ok`, `stop` said "no pidfile" and left it running → `stop.sh`, `llamactl.sh` now fall back to the port owner (`sockstat`), `unstick.sh restart` added, `llamactl.sh restart` uses it for hand-started servers |
+| 11:45 | `service llama status` → `restart` → `stop` → `status`, hand-started server | status: "started by hand, no pidfile" + argv; restart: identical relaunch, TERM 2.1 s, UP in 6 s (8.4 s total); stop: "stopped pid … listening on :18080 (started by hand)", VRAM 0; status: "not running (no live pid …, nothing listening on :18080)" |
+| 11:46 | `service llama start` (no MODEL) → `start` again → `restart` → `unstick.sh check`, `start.sh` provenance | start: replayed `qwen9b NP=1`, UP in 6 s; second start: "already running: pid … via start.sh"; restart: stop.sh + replay, 9.1 s total, pidfile updated; check: ok |
 
 ## 7. At the real end (when the research phase is over)
 

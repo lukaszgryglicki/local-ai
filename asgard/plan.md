@@ -421,6 +421,10 @@ not a selection criterion. Measured as the aggregate generation rate over a whol
 session (e.g. qwen9b C task: 14.6 t/s aggregate, 6.8 at 200K, 35 fresh), so a model must clear
 the floor at depth, not only at a fresh context.
 
+Reporting rule (owner, 11:52): a task verdict is `PASS` / `FAIL-task` (the model did not accomplish the assignment,
+nothing of ours broke) / `FAIL-infra` (llama-server, qwen-code, thermal action, freeze, network — re-run, never counted
+against the model); status messages say which one every time.
+
 Order of work: finish T-1 (this file + `results-t1.md`) → STOP → T0 → T1 → T2 only if the owner still wants it at the end; the
 per-tier winner and its knobs get frozen into `models.sh`/`serve.sh` defaults and documented in
 `ops.md`. Speed factors recorded per model (from the E2E logs, not synthetic): incremental prompt
