@@ -7,10 +7,16 @@
 # log slice written during the run.
 # Output (preserved): /data/ai/TASK-task-MODEL/{qwen.log,health.txt,summary.txt,per-request.txt,+ the model's project};
 # a previous run is kept as /data/ai/TASK-task-MODEL.prev-<timestamp>. summary.txt is also printed.
-# RESUME=SESSION-UUID e2e-test.sh MODEL TASK continues an interrupted run (server restart, suspend, crash) in the existing
-# directory: qwen.sh -r UUID with a short "continue" nudge (RESUME_PROMPT), output appended to qwen.log, the previous
-# summary.txt/per-request.txt kept as *.prev-<timestamp>; the server-side timings of the new summary cover only the
-# resumed part, the qwen stream summary (tool calls) the whole log. Session id: the "session_id" field in qwen.log.
+# Self-healing: when qwen ends with an "[API Error ...]" result (server killed/restarted, S3 hang, connection reset) the
+# run is NOT over - the harness waits for /health (E2E_WAIT_UP, default 1800 s), then continues the same session with
+# qwen -r SESSION-ID (qwen -c if the id is not in the log) and a short nudge (RESUME_PROMPT), up to E2E_RESUMES (3)
+# times; output is appended to qwen.log, resume.log lists the events, the summary header shows resumes= and the
+# downtime (wall includes it). If the server log was rotated by asgard/start.sh meanwhile, the timing slice spans
+# llama.log.prev + llama.log. RESUME=SESSION-UUID e2e-test.sh MODEL TASK does the same by hand after the harness
+# itself died (crash, reboot): existing directory, previous summary/per-request kept as *.prev-<timestamp>.
+# asgard/unstick.sh watch runs alongside the task (E2E_UNSTICK=0 disables): a server whose GPU work will never finish
+# (S3 suspend with a request in flight) is killed and restarted with start.sh --last, which turns the silent hang into
+# the API error above and therefore into a resume.
 d=$(dirname "$(realpath "$0")")
 M=${1:-north}; T=${2:-rust}
 . "$d/e2e-tasks.sh"
@@ -31,18 +37,39 @@ fi
 "$d/health.sh" > health.txt 2>&1 || { cat health.txt; echo "server not healthy - aborting"; exit 1; }
 [ -n "$QARGS" ] || { STDIN=$(e2e_prepare "$T" "$W") || { echo "task preparation failed"; exit 1; }; }
 [ -n "$STDIN" ] || STDIN=/dev/null
-off=$(stat -f %z "$LOG" 2>/dev/null || echo 0)
-t0=$(date +%s)
+off=$(stat -f %z "$LOG" 2>/dev/null || echo 0); ino=$(stat -f %i "$LOG" 2>/dev/null || echo 0); slices="$LOG:$off"
+NUDGE=${RESUME_PROMPT:-"The model server was restarted and your last request failed with a connection error; nothing on disk was lost. Continue the original task exactly where you left off."}
+last_result() { grep '"type":"result"' qwen.log | tail -1; }
+api_error() { last_result | grep -q '"result":"\[API Error'; }
+t0=$(date +%s); resumes=0; downtime=0
+[ "${E2E_UNSTICK:-1}" = 0 ] || { "$d/unstick.sh" watch 30 >> unstick.log 2>&1 & UW=$!; }
 MODEL=$M timeout 14400 "$d/qwen.sh" --yolo -o stream-json $QARGS "$PROMPT" < "$STDIN" >> qwen.log 2>&1
 rc=$?
-t1=$(date +%s)
+while [ "$resumes" -lt "${E2E_RESUMES:-3}" ] && api_error; do   # self-heal: wait for the server, continue the session
+  resumes=$((resumes + 1)); td=$(date +%s); sid=$(last_result | sed -n 's/.*"session_id":"\([0-9a-f-]*\)".*/\1/p')
+  echo "$(date '+%F %T') resume $resumes: $(last_result | sed -n 's/.*"result":"\(\[API Error[^"]\{0,120\}\).*/\1/p') - waiting for the server (max ${E2E_WAIT_UP:-1800} s)" >> resume.log
+  up() { curl -s -m 5 http://10.253.254.1:18080/health 2>/dev/null | grep -q '"ok"'; }   # /health only: no request, keeps a live KV cache
+  w=0; until up; do sleep 30; w=$((w + 30)); [ "$w" -ge "${E2E_WAIT_UP:-1800}" ] && break; done
+  downtime=$((downtime + $(date +%s) - td))
+  up || { echo "$(date '+%F %T') server still down after $w s - giving up" >> resume.log; break; }
+  if [ "$(stat -f %i "$LOG" 2>/dev/null)" != "$ino" ]; then slices="$LOG.prev:$off $LOG:0"; ino=$(stat -f %i "$LOG"); off=0; fi   # log rotated by start.sh
+  echo "$(date '+%F %T') server back after $(($(date +%s) - td)) s, qwen ${sid:+-r $sid}${sid:--c}" >> resume.log
+  MODEL=$M timeout 14400 "$d/qwen.sh" --yolo -o stream-json ${sid:+-r "$sid"} ${sid:--c} "$NUDGE" < /dev/null >> qwen.log 2>&1
+  rc=$?
+done
+t1=$(date +%s); [ -n "${UW:-}" ] && kill "$UW" 2>/dev/null
 {
-echo "== e2e-test $M $T ${RESUME:+(resumed $RESUME) } $(date)  qwen rc=$rc  wall=$((t1 - t0)) s  stdin=$( [ "$STDIN" = /dev/null ] && echo none || wc -c < "$STDIN" | tr -d ' ' ) bytes"
+echo "== e2e-test $M $T ${RESUME:+(resumed $RESUME) } $(date)  qwen rc=$rc  wall=$((t1 - t0)) s  stdin=$( [ "$STDIN" = /dev/null ] && echo none || wc -c < "$STDIN" | tr -d ' ' ) bytes  resumes=$resumes downtime=$downtime s"
+[ -f resume.log ] && sed 's/^/  /' resume.log; [ -s unstick.log ] && grep STUCK unstick.log | sed 's/^/  unstick: /'
 cat health.txt
 echo "== server-side timings for this run (log slice):"
-python3 - "$LOG" "$off" per-request.txt <<'EOF'
+python3 - "$slices" per-request.txt <<'EOF'
 import re, sys
-data = open(sys.argv[1], "rb").read()[int(sys.argv[2]):].decode("utf-8", "replace")
+data = ""
+for part in sys.argv[1].split():   # "file:offset ..." - more than one when the server log was rotated during the run
+    f, o = part.rsplit(":", 1)
+    try: data += open(f, "rb").read()[int(o):].decode("utf-8", "replace")
+    except OSError as e: print("cannot read log slice %s: %s" % (part, e))
 reqs = re.findall(r"task (\d+) \| prompt eval time =\s*([\d.]+) ms /\s*(\d+) tokens.*?\n.*?\|\s*eval time =\s*([\d.]+) ms /\s*(\d+) tokens"
                   r"(?:.*?\n(?:.*?draft acceptance = ([\d.]+) \(\s*(\d+) accepted /\s*(\d+) generated)?)?.*?stop processing: n_tokens =\s*(\d+)", data, re.S)
 if not reqs:
@@ -63,7 +90,7 @@ else:
     if acc:
         a = sum(x for x, _ in acc); g = sum(y for _, y in acc)
         print("speculative: %d drafted, %d accepted (%.1f%%) over %d requests with drafts" % (g, a, 100 * a / g if g else 0, len(acc)))
-    with open(sys.argv[3], "w") as f:
+    with open(sys.argv[2], "w") as f:
         f.write("req  ctx_tokens  pp_tok  pp_t/s  gen_tok  tg_t/s  draft_acc\n")
         for i, r in enumerate(reqs):
             f.write("%3d %10s %7s %7.0f %8s %7.1f  %s\n" % (i, r[8], r[2], int(r[2]) / float(r[1]) * 1000 if float(r[1]) else 0, r[4],

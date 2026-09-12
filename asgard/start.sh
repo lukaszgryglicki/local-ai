@@ -1,14 +1,18 @@
 #!/bin/sh
 # /data/local-ai/asgard/start.sh MODEL - daemonize asgard/serve.sh MODEL, wait until /health is ok
 # (or the server dies), then print load time, VRAM use and the KV/compute buffer lines from the log.
-# Env passes through to serve.sh (NP, CTX, THREADS, THREADS_BATCH, NCMOE, EXTRA). Stop: asgard/stop.sh
+# Env passes through to serve.sh (NP, CTX, THREADS, THREADS_BATCH, NCMOE, SPEC, EXTRA, IGPU_MOE, DEV, VKVIS). Stop: asgard/stop.sh
+# Every start is remembered in ~/local-ai-runs/last-start.env; start.sh --last replays it (used by asgard/unstick.sh
+# after a hung server had to be killed, e.g. after an S3 suspend with a request in flight).
 d=$(dirname "$(realpath "$0")")
 RUNS=${LOCAL_AI_RUNS:-$HOME/local-ai-runs}; mkdir -p "$RUNS"   # /var/tmp is a 1 GiB tmpfs symlink on asgard (wiped at boot)
 LOG=${LOG:-$RUNS/llama.log}; export LOG
 PID=$RUNS/llama.pid
+if [ "${1:-}" = --last ]; then . "$RUNS/last-start.env" || exit 1; set -- "$LAST_MODEL"; echo "replaying: $(cat "$RUNS/last-start.env" | tr '\n' ' ')"; fi
 [ -f "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null && { echo "already running (pid $(cat "$PID")) - asgard/stop.sh first"; exit 1; }
 [ -f "$LOG" ] && mv "$LOG" "$LOG.prev"   # llama-server truncates --log-file on open; keep the previous run
 t0=$(date +%s)
+{ echo "LAST_MODEL=${1:-north}"; for v in NP CTX THREADS THREADS_BATCH NCMOE SPEC EXTRA IGPU_MOE DEV VKVIS; do eval "val=\${$v:-}"; [ -n "$val" ] && echo "export $v='$val'"; done; } > "$RUNS/last-start.env"
 daemon -f -p "$PID" "$d/serve.sh" "${1:-north}" || exit 1
 sleep 2
 while :; do
