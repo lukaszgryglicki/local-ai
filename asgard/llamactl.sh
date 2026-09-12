@@ -8,8 +8,10 @@
 #                  pass through the environment when run as the user, e.g. NP=2 ./llamactl.sh start gemma
 #                  no MODEL -> replay the last start, whoever made it (start.sh --last, ~/local-ai-runs/last-start.env),
 #                  or DEFAULT_MODEL if nothing was ever started
-#   stop           asgard/stop.sh (TERM, KILL after 30 s)
-#   restart [..]   stop, then start with the same rules (no MODEL = the same config again)
+#   stop           asgard/stop.sh (TERM, KILL after 30 s) - the pidfile's server or, without one, whatever llama-server
+#                  listens on :18080 (a server started by hand with daemon -f ./serve.sh ... is found and stopped too)
+#   restart [..]   stop, then start with the same rules (no MODEL = the same config again; a hand-started server is
+#                  relaunched identically - argv/env/cwd from the kernel, asgard/unstick.sh restart)
 #   status         pid, how it was started, /health, /props, /slots - metadata only (asgard/health.sh sends a real
 #                  completion: never while a task runs, with NP=1 it would evict the task's cache)
 SERVICE_USER=lgryglicki
@@ -22,16 +24,24 @@ if [ "$(id -un)" != "$SERVICE_USER" ]; then
 fi
 RUNS=${LOCAL_AI_RUNS:-$HOME/local-ai-runs}; export LOCAL_AI_RUNS=$RUNS
 u=http://10.253.254.1:18080; k=$(cat "$d/../key.secret" 2>/dev/null)
-running() { p=$(cat "$RUNS/llama.pid" 2>/dev/null) && kill -0 "$p" 2>/dev/null; }
+running() {   # sets p (pid) and how (start.sh | hand): the pidfile's live pid, else the llama-server listening on :18080
+  p=$(cat "$RUNS/llama.pid" 2>/dev/null) && kill -0 "$p" 2>/dev/null && { how=start.sh; return 0; }
+  p=$(sockstat -4l -p 18080 2>/dev/null | awk 'NR>1 && $2 ~ /^llama/ {print $3; exit}'); [ -n "$p" ] && { how=hand; return 0; }
+  return 1
+}
+describe() {   # uses p how
+  if [ "$how" = start.sh ]; then echo "pid $p via start.sh: $(tr '\n' ' ' < "$RUNS/last-start.env" 2>/dev/null)"
+  else echo "pid $p (user $(ps -o user= -p "$p" | tr -d ' ')) started by hand, no pidfile - argv: $(procstat -c "$p" 2>/dev/null | awk 'NR>1{$1=$2="";print}' | tr -s ' ' | cut -c1-400)"; fi
+}
 start() {
-  if running; then echo "already running (pid $p): $(tr '\n' ' ' < "$RUNS/last-start.env" 2>/dev/null)"; return 0; fi
+  if running; then echo "already running: $(describe)"; return 0; fi
   if [ -n "${1:-}" ]; then exec "$d/start.sh" "$1"
   elif [ -f "$RUNS/last-start.env" ]; then exec "$d/start.sh" --last
   else exec "$d/start.sh" "$DEFAULT_MODEL"; fi
 }
 status() {
-  if running; then echo "llama is running as pid $p: $(tr '\n' ' ' < "$RUNS/last-start.env" 2>/dev/null)"
-  else echo "llama is not running (no live pid in $RUNS/llama.pid)"; fi
+  if running; then echo "llama is running: $(describe)"
+  else echo "llama is not running (no live pid in $RUNS/llama.pid, nothing listening on :18080)"; fi
   h=$(curl -s -m 5 "$u/health") || { echo "health: no answer on $u/health"; running; return; }
   echo "health: $h"
   { curl -s -m 5 -H "Authorization: Bearer $k" "$u/props"; echo; curl -s -m 5 -H "Authorization: Bearer $k" "$u/slots"; } | python3 -c '
@@ -52,7 +62,8 @@ except Exception as e:
 case $MODE in
   start) start "$@" ;;
   stop) exec "$d/stop.sh" ;;
-  restart) "$d/stop.sh"; start "$@" ;;
+  restart) if [ -z "${1:-}" ] && running && [ "$how" = hand ]; then exec "$d/unstick.sh" restart; fi
+           "$d/stop.sh"; start "$@" ;;
   status) status ;;
   *) sed -n '2,16p' "$0"; exit 1 ;;
 esac

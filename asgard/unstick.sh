@@ -1,5 +1,5 @@
 #!/bin/sh
-# /data/local-ai/asgard/unstick.sh check|fix|watch [SEC]|kill|show|pre-suspend|post-resume - repair a llama-server whose
+# /data/local-ai/asgard/unstick.sh check|fix|watch [SEC]|kill|show|restart|pre-suspend|post-resume - repair a llama-server whose
 # GPU work will never finish, and the thermal watchdog's suspend hooks.
 # Background (2026-09-12 07:26, manual zzz with a request in flight): the box resumed fine and the process, /health and
 # /slots stayed alive, but the main loop slept forever in ggml_vk_wait_for_fence -> libnvidia-eglcore poll() on a fence
@@ -19,6 +19,8 @@
 #                 hung for whatever reason (incl. an owner's zzz mid-task) is replaced and the task's qwen session resumed
 #   kill          no check: kill -9 + restart right away (when you know it is stuck)
 #   show          who/how/where the server runs + write the identical-relaunch launcher (nothing is touched)
+#   restart       stop the server (TERM, KILL after RESTART_GRACE (30) s) and start it again by provenance: start.sh --last
+#                 for a start.sh server, identical relaunch for a hand-started one (llamactl.sh restart uses this)
 #   pre-suspend   thermal-watchdog WD_SUSPEND_PRE (root): stop a running server (TERM, KILL after GRACE (3) s), remember
 #                 how to bring it back in /var/run/llama-s3.state; no server -> nothing
 #   post-resume   thermal-watchdog WD_SUSPEND_POST (root): if the state file says a server was running, start it again
@@ -28,7 +30,7 @@
 # check/fix never touch anything when there is no server, when the slot is idle or when the GPU is busy.
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 d=$(dirname "$(realpath "$0")"); PORT=${PORT:-18080}; u=http://10.253.254.1:$PORT; k=$(cat "$d/../key.secret" 2>/dev/null)
-STUCK_AFTER=${STUCK_AFTER:-60}; GRACE=${GRACE:-3}; STATE=/var/run/llama-s3.state; MODE=${1:-check}
+STUCK_AFTER=${STUCK_AFTER:-60}; GRACE=${GRACE:-3}; RESTART_GRACE=${RESTART_GRACE:-30}; STATE=/var/run/llama-s3.state; MODE=${1:-check}
 server_pid() { sockstat -4l -p "$PORT" 2>/dev/null | awk 'NR>1 && $2 ~ /^llama/ {print $3; exit}'; }
 processing() { curl -s -m 5 -H "Authorization: Bearer $k" "$u/slots" 2>/dev/null | grep -q '"is_processing":true'; }
 gpu_busy() { [ "$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')" != 0 ]; }
@@ -112,11 +114,16 @@ case $MODE in
         echo "llama-server pid $p, user $USER_, cwd $CWD, started via $HOW, log ${LOGFILE:-?}"
         echo "restart would be: $( [ "$HOW" = start.sh ] && echo "start.sh --last ($(tr '\n' ' ' < "$RUNS/last-start.env"))" || echo "identical relaunch")"
         echo "launcher: $LAUNCHER"; sed -n '3,$p' "$LAUNCHER" | tr -s ' ' | fold -w 160 | head -12 ;;
+  restart)
+    p=$(server_pid); [ -n "$p" ] || { echo "$(now) restart: no server on :$PORT"; exit 0; }
+    capture "$p"; r=$(terminate "$p" "$RESTART_GRACE"); [ "$HOW" = start.sh ] && as_user "rm -f '$RUNS/llama.pid'"
+    logln "$(now) restart: stopped llama-server pid $p ($USER_, via $HOW): $r - starting again via $HOW"
+    bring_back ;;
   pre-suspend)
     [ "$(id -u)" = 0 ] || { echo "pre-suspend must run as root (thermal-watchdog WD_SUSPEND_PRE)"; exit 1; }
     p=$(server_pid); [ -n "$p" ] || { rm -f "$STATE"; echo "$(now) pre-suspend: no server"; exit 0; }
     capture "$p"
-    printf 'HOW=%s\nUSER_=%s\nRUNS=%s\nLAUNCHER=%s\nD=%s\nPID=%s\nWHEN=%s\n' "$HOW" "$USER_" "$RUNS" "$LAUNCHER" "$D" "$p" "$(now)" > "$STATE"
+    printf "HOW='%s'\nUSER_='%s'\nRUNS='%s'\nLAUNCHER='%s'\nD='%s'\nPID='%s'\nWHEN='%s'\n" "$HOW" "$USER_" "$RUNS" "$LAUNCHER" "$D" "$p" "$(now)" > "$STATE"
     r=$(terminate "$p" "$GRACE"); [ "$HOW" = start.sh ] && as_user "rm -f '$RUNS/llama.pid'"
     logln "$(now) pre-suspend: stopped llama-server pid $p ($USER_, via $HOW): $r - restart on resume via $HOW" ;;
   post-resume)
@@ -125,5 +132,5 @@ case $MODE in
     . "$STATE"; rm -f "$STATE"
     logln "$(now) post-resume: restarting llama-server via $HOW (stopped $WHEN before the suspend)"
     bring_back ;;
-  *) sed -n '2,31p' "$0"; exit 1 ;;
+  *) sed -n '2,30p' "$0"; exit 1 ;;
 esac
