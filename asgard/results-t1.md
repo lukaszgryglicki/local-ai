@@ -508,6 +508,42 @@ tasks would have been the risk zone with an MTP draft; gemma has none). Behaviou
 and moves on without running the build/tests (asm: 0 shell calls; C: kept its own failing selftest); the one thing
 North/qwen9b did more of (looping on tool output) it does less, which is why it is quick and why it misses the last mile.
 
+## 4. Qwen3.6-35B-A3B UD-IQ2_M (T-1b, test-only: a 35B-A3B entirely in VRAM with 2-bit experts)
+
+Non-MTP file → `ngram-mod`/`none` only; `MODEL_CACHE_RAM=8192`, patched build, `GGML_VK_ALLOW_SYSMEM_FALLBACK` unset.
+
+### Fit (ctx = NP × 262 144, q8_0 KV)
+
+| NP | result |
+|---|---|
+| 2 | `failed to allocate Vulkan0 buffer of size 131727360` → kv cache |
+| **1** | **UP in 17 s, 14 099 / 16 384 MiB** — the whole 35B-A3B in VRAM (plan estimate 14.65 GiB); no `NCMOE`/`IGPU_MOE` needed, so the iGPU-vs-RAM question does not arise in T-1 |
+
+### Speed — spec-decoding sweep (`sweep.sh qwen35b "ngram=ngram-mod" "none=none"`, 16:38–16:50, BIOS Cool, 150 s idle gaps, greedy, thinking on, 2 048 tok cap)
+
+| config (`SPEC=`) | VRAM MiB | p0 rust-reverse: gen tok / t/s | p1 nginx-regex: gen tok / t/s | aggregate t/s |
+|---|---|---|---|---|
+| `ngram-mod` | 14 099 | 1 933 / 50.30 | 2 048\* / 50.33 | 50.34 |
+| `none` | 14 099 | 1 909 / **61.32** | 2 048\* / **56.35** | **58.67** |
+
+\* cap reached in both runs (thinking); p0 answers differ by 24 tokens (batch-shape non-determinism), the rates compare.
+
+- **`none` is 17 % faster** — the first model where n-gram speculation is a clear loss: on a MoE every verified draft
+  token pulls its own experts, so rejected drafts (≈ 50 % acceptance) cost real bandwidth; qwen9b (dense) gained
+  5–15 % from the same drafter, gemma (MoE) broke even.
+- 56–61 t/s raw decode for 2-bit experts — the fastest T-1 candidate on paper (gemma 48 cold).
+
+**E2E choice: `SPEC=none` (sweep winner), NP=1, ctx 262 144, patched build** (`e2e-all.sh qwen35b`, started 16:51).
+
+### Full test — the four-task E2E (`e2e-all.sh qwen35b`, 16:51–, `SPEC=none`, NP=1, ctx 262 144)
+
+| task | wall | turns | requests (≥1K-tok batches) | prompt tok (pp) | gen tok | tg t/s agg (min–max) | ctx max | verdict |
+|---|---|---|---|---|---|---|---|---|
+| rust | **110 s** | 14 | 14 (1) | 25 777 (22 857 @ 800 t/s) | 2 849 | 45.8 (38.9–47.7) | 28.6K | **PASS 18/18** round-trips, 47-line `main.rs`, 4 tests pass; 5 shell commands — builds and tests as told |
+| go | **256 s** | 20 | 20 (5) | 33 250 (23 005 @ 963 t/s) | 8 489 | 44.0 (39.3–48.7) | 37.3K | **PASS 47/47** incl. the 6 MB single line; 527 lines (`main.go` + 5 table-driven test funcs), vet/build/test clean; 13 shell commands |
+| c | 2 584 s (43 min) | 117 | 117 (10) | 82 444 (23 037 @ 967 t/s; 383 t/s agg) | 76 970 | 34.8 (26.6–44.8) | 135.3K | **FAIL-task, near-miss**: 488-line `bignum.c`, `-Werror` + ASan/UBSan clean, `make test`/`--selftest` ok, **420/420 arithmetic lines exact** (incl. 3 000-digit operands) — but blank input lines are echoed as empty output lines instead of skipped (and some malformed lines emit an extra empty line), so the malformed/blank check fails. 57 shell commands + 38 edits in 117 turns: a real build–test–fix loop, no looping |
+Q35_E2E
+
 ## E2E tasks — the four-task suite (`e2e-tasks.sh`, `e2e-test.sh`, `e2e-all.sh`, `verify-*.sh`)
 
 Each task is one headless qwen-code session (`qwen.sh --yolo -o stream-json`, `contextWindowSize` 262 144,
