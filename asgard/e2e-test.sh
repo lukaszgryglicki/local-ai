@@ -10,6 +10,8 @@
 # Self-healing: when qwen ends with an "[API Error ...]" result (server killed/restarted, S3 hang, connection reset) the
 # run is NOT over - the harness waits for /health (E2E_WAIT_UP, default 1800 s), then continues the same session with
 # qwen -r SESSION-ID (qwen -c if the id is not in the log) and a short nudge (RESUME_PROMPT), up to E2E_RESUMES (3)
+# E2E_CAP: wall-clock cap per qwen invocation in seconds (default 14400 = 4 h; a run under the GPU clock pin uses
+# E2E_CAP=21600 and the summary line says so - a cap hit under the pin is FAIL-infra, never charged to the model).
 # times; output is appended to qwen.log, resume.log lists the events, the summary header shows resumes= and the
 # downtime (wall includes it). If the server log was rotated by asgard/start.sh meanwhile, the timing slice spans
 # llama.log.prev + llama.log. RESUME=SESSION-UUID e2e-test.sh MODEL TASK does the same by hand after the harness
@@ -43,7 +45,7 @@ last_result() { grep '"type":"result"' qwen.log | tail -1; }
 api_error() { last_result | grep -q '"result":"\[API Error'; }
 t0=$(date +%s); resumes=0; downtime=0
 [ "${E2E_UNSTICK:-1}" = 0 ] || { "$d/unstick.sh" watch 30 >> unstick.log 2>&1 & UW=$!; }
-MODEL=$M timeout 14400 "$d/qwen.sh" --yolo -o stream-json $QARGS "$PROMPT" < "$STDIN" >> qwen.log 2>&1
+MODEL=$M timeout "${E2E_CAP:-14400}" "$d/qwen.sh" --yolo -o stream-json $QARGS "$PROMPT" < "$STDIN" >> qwen.log 2>&1
 rc=$?
 while [ "$resumes" -lt "${E2E_RESUMES:-3}" ] && api_error; do   # self-heal: wait for the server, continue the session
   resumes=$((resumes + 1)); td=$(date +%s); sid=$(last_result | sed -n 's/.*"session_id":"\([0-9a-f-]*\)".*/\1/p')
@@ -63,12 +65,12 @@ while [ "$resumes" -lt "${E2E_RESUMES:-3}" ] && api_error; do   # self-heal: wai
   up || { echo "$(date '+%F %T') server still down after $w s - giving up" >> resume.log; break; }
   if [ "$(stat -f %i "$LOG" 2>/dev/null)" != "$ino" ]; then slices="$LOG.prev:$off $LOG:0"; ino=$(stat -f %i "$LOG"); off=0; fi   # log rotated by start.sh
   echo "$(date '+%F %T') server back after $(($(date +%s) - td)) s, qwen $ropt $rarg" >> resume.log
-  MODEL=$M timeout 14400 "$d/qwen.sh" --yolo -o stream-json $ropt ${rarg:+"$rarg"} "$NUDGE" < /dev/null >> qwen.log 2>&1
+  MODEL=$M timeout "${E2E_CAP:-14400}" "$d/qwen.sh" --yolo -o stream-json $ropt ${rarg:+"$rarg"} "$NUDGE" < /dev/null >> qwen.log 2>&1
   rc=$?
 done
 t1=$(date +%s); [ -n "${UW:-}" ] && kill "$UW" 2>/dev/null
 {
-echo "== e2e-test $M $T ${RESUME:+(resumed $RESUME) } $(date)  qwen rc=$rc  wall=$((t1 - t0)) s  stdin=$( [ "$STDIN" = /dev/null ] && echo none || wc -c < "$STDIN" | tr -d ' ' ) bytes  resumes=$resumes downtime=$downtime s"
+echo "== e2e-test $M $T ${RESUME:+(resumed $RESUME) } $(date)  qwen rc=$rc  wall=$((t1 - t0)) s  cap=${E2E_CAP:-14400}${E2E_NOTE:+ ($E2E_NOTE)}  stdin=$( [ "$STDIN" = /dev/null ] && echo none || wc -c < "$STDIN" | tr -d ' ' ) bytes  resumes=$resumes downtime=$downtime s"
 [ -f resume.log ] && sed 's/^/  /' resume.log; [ -s unstick.log ] && grep STUCK unstick.log | sed 's/^/  unstick: /'
 cat health.txt
 echo "== server-side timings for this run (log slice):"

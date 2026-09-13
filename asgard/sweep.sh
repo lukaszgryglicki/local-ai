@@ -7,6 +7,8 @@
 # A third ;-field sets environment variables for start.sh (NCMOE, IGPU_MOE, NP, CTX, THREADS, ...).
 # BENCH=bench (T2 placement/threads sweeps on slow models): run bench.py LABEL $DEPTHS (default "64 4096", GEN=256)
 # instead of codebench.py - ~5 min per config instead of 20-30 at 3 t/s; keep codebench for the 2-3 finalists.
+# Each config first waits (wait-no-verify.sh, up to 90 min) while a download verification runs - its NVMe stream heats the
+# PCH past 85 C and the watchdog drops the CPU turbo band / caps the CPU, which would falsify the numbers (2026-09-13).
 # Example: sweep.sh qwen35b "ngram=ngram-mod" "none=none"
 #          sweep.sh qwen35b-q4 "cpu20=none;;NCMOE=20" "n12=ngram-mod;--spec-draft-n-max 12"
 #          sweep.sh qwen35b "vram=ngram-mod" "cpu5=ngram-mod;;NCMOE=5" "igpu5=ngram-mod;;IGPU_MOE=5"
@@ -19,7 +21,7 @@ echo "# sweep $M $(date '+%F %T') GAP=$GAP MAXTOK=$MAXTOK NP=${NP:-1} CTX=${CTX:
 for cfg in "$@"; do
   label=${cfg%%=*}; rest=${cfg#*=}; spec=${rest%%;*}; extra=; envs=
   case $rest in *\;*) rest=${rest#*;}; extra=${rest%%;*}; case $rest in *\;*) envs=${rest#*;};; esac;; esac
-  ./stop.sh >/dev/null 2>&1; sleep "$GAP"
+  ./stop.sh >/dev/null 2>&1; "$d/wait-no-verify.sh" 5400; sleep "$GAP"   # never measure during a model verification (PCH -> CPU cap)
   up=$(env $envs SPEC=$spec EXTRA="$extra" ./start.sh "$M" 2>&1 | head -1 | cut -c1-160)
   case $up in UP*) ;; *) echo "$(date +%T) $label START_FAILED: $up"; echo "$label,START_FAILED" >> "$OUT"; continue;; esac
   echo "$(date +%T) $label START $(st) | $up"

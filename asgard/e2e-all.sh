@@ -8,6 +8,7 @@ d=$(dirname "$(realpath "$0")"); M=${1:-qwen35b}; shift; TASKS=${*:-rust go c as
 first=1
 for T in $TASKS; do
   [ $first = 1 ] || sleep "$GAP"; first=0
+  "$d/wait-no-verify.sh" 5400   # a task never starts during a model verification (PCH -> CPU turbo band off / cap); mid-task overlaps are noted in the report
   echo "=== $(date +%T) $M $T  pch=$(sysctl -n dev.pchtherm.0.temperature | cut -d. -f1) gpu=$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader)C"
   "$d/e2e-test.sh" "$M" "$T" > /dev/null 2>&1
   grep -E "^== e2e-test|^requests:|^result:|^usage:|^VERDICT|^context depth|^speculative|^prompt batches" "/data/ai/$T-task-$M/summary.txt" | cut -c1-220
