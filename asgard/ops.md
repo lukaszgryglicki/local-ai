@@ -238,6 +238,12 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   GPU idle, cf. shard 3: 27 GiB in 3.7 min at 12:56). Old verifier killed (retry 2/6 of the queue), new one yielding since 13:31:13;
   a one-off `busy-waiter.sh` clears the file when the c task's pre-patch `e2e-test.sh` (pid 7838) exits.
 
+- 13 Sep 13:49 — `~/local-ai-runs/t1-chain3.sh` queued behind chain 2 (waits for pid 28430): pin check → kat-q4 THREADS A/B
+  (cpu19b/cpu19-t16c/cpu19c/cpu19-t16d) → qwen35b-q4 depth headroom NCMOE=22/24 at 2048/65536/131072 → Flash-Next fit ladder
+  `ALL=1 fit.sh flashnext 44 45 46 47` → first T2 sweep `cpuall` vs `cpu45` → pin check. Flash-Next inventory (gguf-hdr.py):
+  48 layers, experts 55.43 GiB (1.16 GiB/layer, IQ4_NL/IQ3_S/IQ4_XS), `per_layer_token_embd` 26.82 GiB (IQ4_NL, CPU side),
+  12 full-attention + 36 SSM layers, no MTP tensors → `SPEC=none` stays.
+
 ## 7. At the real end (when the research phase is over)
 
 - Boot start: remove `nostart` from the `KEYWORD` line of `asgard/rc.d/llama`, reinstall the stub
