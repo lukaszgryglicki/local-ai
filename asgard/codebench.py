@@ -11,6 +11,7 @@ import json, os, sys, time, urllib.request
 BASE = "http://10.253.254.1:18080"
 KEY = open(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "key.secret")).read().strip()
 LABEL = sys.argv[1] if len(sys.argv) > 1 else "cfg"
+from settle import settle; settle()   # never measure under the watchdog cap / hot PCH (asgard/settle.py, NO_SETTLE=1 skips)
 N = int(sys.argv[2]) if len(sys.argv) > 2 else 3
 MAXTOK = int(os.environ.get("MAXTOK", "4096"))
 PROMPTS = [

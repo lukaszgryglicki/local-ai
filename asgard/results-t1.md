@@ -112,10 +112,14 @@ decode. Buffer accounting at k=20 (`-lv 5`): Vulkan0 model **11 420.80 MiB** + V
 | `cpu20-ngram` | `NCMOE=20`, `SPEC=ngram-mod` | 84.9 / 97.7 | 28.36 / 27.98 | 28.16 | −4…−8 % → `SPEC=none` stays |
 | ~~`igpu20`~~ | `IGPU_MOE=20` *without* `NCMOE=0` | 82.5 / 95.6 | 28.78 / 28.64 | 28.72 | **false test**: the model's default `--n-cpu-moe 20` (a `=CPU` override listed first) shadowed the `=Vulkan1` override — identical VRAM 15 144 MiB gave it away; `serve.sh` now sets `NCMOE=0` whenever `IGPU_MOE>0` unless given explicitly |
 | `igpu20-true` | `IGPU_MOE=20`, `NCMOE=0`, embeddings on Vulkan0 | 5.6 / 7.0 | 16.09 / 16.20 | 16.16 | §1, the real iGPU number |
+| `cpu20-ac2` (13 Sep 12:27, chain 2) | `NCMOE=20` re-run on a healthy GPU, settle step, `ac=1` | 61.0 / 96.8 | 32.40 / 30.89 | **31.56** | reproduces the 12 Sep 30.69 (+3 %) — the 12 Sep sweep stands as valid |
+| `cpu20-nohost` (12:32) | `NCMOE=20`, `EXTRA=--no-host` (CPU-side tensors in plain instead of pinned host memory, unlocks the "extra" repacked CPU buffer types) | **35.8 / 74.4** | 33.57 / 31.80 | 32.55 | +3 % tg, **−20…−40 % pp** (un-pinned uploads for the offloaded experts' activations) — off |
+| `cpu20-t16` (12:37) | `NCMOE=20`, `THREADS=16` | 51.0 / 89.7 | 31.87 / 29.00 | 30.22 | −4 % tg, pp down on prompt 0: SMT threads add contention on the bandwidth-bound expert reads (same as `qwen35b-q8` §5.2) → THREADS stays 8 |
 
 **Against the T1 goal** (≥ 6 t/s output, floor 4, ideal 7–10): `qwen35b-q4` at `NCMOE=20` generates **30.7 t/s** on
 short prompts — 3× above the ideal band, half of the IQ2_M all-VRAM winner (61.3), with prompt processing that still
-runs on the Quadro. `models.sh`: `MODEL_NCMOE=20` confirmed for `qwen35b-q4`.
+runs on the Quadro. `models.sh`: `MODEL_NCMOE=20` confirmed for `qwen35b-q4`. Variants (13 Sep, chain 2): `--no-host`
+and 16 threads both rejected; the frozen T1 knobs for this file are the plain defaults (`NCMOE=20 THREADS=8 SPEC=none`).
 
 ### 2.3 Depth bench and E2E — **pending (must be re-run on AC)**
 
@@ -280,6 +284,9 @@ does not do it, a reboot is the remaining option (owner's call). Pending anyway:
   after: **16.49 t/s, SM 1035 MHz in P2 at 57 W, no Clocks-Event reason flagged → still pinned.** Consistent with the 09:49
   warm reboot (a full driver re-init on mains) not helping: the DC boost limit is held outside the driver (EC → GPU
   power-source signal / PMU latch), so nothing software-side clears it. Cold power-off remains the only remedy.
+- **11:36–11:41 owner: `shutdown -p`, AC unplugged, 30 s power-button hold, replug, power on → 11:44:10 pin check
+  60.23 t/s, SM max 1935 MHz → HEALTHY** (second time the procedure worked, first time it was needed twice in one day).
+  Pool clean, `.part` download resumed from 34.2 GB, watchdog up (ratio 53). Chain 2 continued on its own.
 - **Rules from here.** Pin check = `./start.sh vram; GEN=256 python3 bench.py X 64` → ≥ 55 t/s **and** SM ≥ 1600 MHz P0 under
   load (`nvidia-smi --query-gpu=clocks.sm,pstate`), done before and after every E2E model. Remedy order if pinned: cold
   power-off + AC unplugged + 30 s power-button hold (the only thing that worked); warm reboot and S3 do not. The watchdog logs
@@ -376,7 +383,7 @@ The Intel UHD P630 (i915, `card0`) exposes its Linux sysfs frequency files as sy
   `gt_act_freq_mhz` follows only while the iGPU is awake (parked/RC6 it reads 350). Reverted to 350 afterwards; RPS then
   stepped `cur` 1250 → 733 by itself on the next Xorg wake, i.e. the dynamic scaling is alive on FreeBSD too.
 - Automatic climb under an `IGPU_MOE` load: measured by `~/local-ai-runs/igpu-freq-sampler.sh` during the `igpu19`
-  (kat-q4) and `igpu29` (qwen35b-q8) sweep configs — see the table below (filled when those configs have run).
+  (kat-q4) and `igpu29` (qwen35b-q8) sweep configs — see the table below. Verdict: no pinning needed, the RPS climbs on its own.
 - If RPS ever sits below 1250 under expert load (bursty kernels can stay under the 95 % up-threshold), the fix is a
   one-liner per run: `gt_min_freq_mhz=1250` before `start.sh`, `=350` after — a candidate `IGPU_MIN_MHZ` hook for
   sweep.sh/start.sh, only worth adding if the sampler shows it is needed.
@@ -384,6 +391,7 @@ The Intel UHD P630 (i915, `card0`) exposes its Linux sysfs frequency files as sy
 | config | server `--device` | act MHz min / typical / max while generating | note |
 |---|---|---|---|
 | `igpu19` kat-q4, 10:54:40–10:55:10 (generating) | `Vulkan0,Vulkan1` | 350 (1 RC6 dip) / **1150** / 1250 — RPS request 1217–1250 the whole time | climbs within 5 s of the first expert kernels (act 1150 already during the model upload at 10:54:25); 1150 rather than 1250 most of the time = package-power sharing with the CPU threads, not RPS |
+| `igpu29` qwen35b-q8, 12:08:58–12:18:11 (whole config, 110 samples at 5 s) | `Vulkan0,Vulkan1` | 350 (16 samples = load phase + RC6 dips between prompts) / **1150** (79 samples) / 1250 (7 samples; 1083–1233 in 8) | same picture over a 9-minute run: the P630 sits at 1150–1250 MHz whenever expert kernels are queued — the iGPU is *not* clock-starved, it is simply slow (igpu29 tg 6.36 vs cpu29 21.45 t/s, §5.2) |
 
 ## 4. `kat-q4` — KAT-Coder-V2.5-Dev Q4_K_L (Qwen3.6-35B-A3B fine-tune, `VERIFIED_OK` 23:18)
 
@@ -415,13 +423,20 @@ no verification overlap (`wait-no-verify.sh` idle). CSV: `~/local-ai-runs/sweep-
 | `cpu19-ngram` (`SPEC=ngram-mod`) | CPU RAM | **26.48** | 66 / 92 | 25 | +5 % tg, −15 % pp — not worth it on 200–400-token answers |
 | `igpu19` (`IGPU_MOE=19 NCMOE=0`) | iGPU (Vulkan1, shared RAM) | 16.78 | **6.3 / 7.1** | 53 | tg −33 %, pp 12× slower; iGPU clock was 1150–1250 MHz while generating (§3.4) |
 | `cpu19-t16` (`THREADS=16`) | CPU RAM | ~~7.21~~ **INVALID** | ~~41 / 33~~ | — | **the AC adapter dropped at 10:58:07, one second after this config came UP** (`acpi_acad0: Off Line`; battery = CPU 1 GHz / 6 W, GPU P5 360 MHz) → FAIL-infra, re-run pending on mains (chain 2) |
+| `cpu19-t16b` (`THREADS=16`, re-run 11:47:04–11:47:24, chain 2, GPU healthy after the cold power-off) | CPU RAM | **34.02** (33.80 / 33.97) | 80 / 93 | 20 | **+35 % tg vs 8 threads** — and that with the CPU *capped* 2400→3200 MHz the whole 20 s (START pch=92 → the watchdog had dropped the turbo band after the 21 GB load; the settle step in sweep.sh was added after this run). Answers were as short as in `cpu19` (209 + 424 tokens), so the KV-depth is comparable. Needs one uncapped confirmation run (`cpu19-t16c`) — scheduled after the E2E cycle |
 
 Conclusion for `kat-q4` (three valid configs, all on mains — the 10:58:07 AC drop came *after* `igpu19` ended 10:55:14):
 **VRAM + CPU RAM (`NCMOE=19`, 8 threads, no spec)** — 25 t/s is 4× the T1 goal (≥ 6) and even above the "ideal" 15–25 band
-of T0. The iGPU/RAM split is out for the T1 models (same verdict as `qwen35b-q4` on 12 Sep: `igpu20` 16.2 vs `cpu20` ~25):
+of T0. The iGPU/RAM split is out for the T1 models (same verdict as `qwen35b-q4` on 12 Sep: `igpu20` 16.2 vs `cpu20` 30.7):
 the UHD P630 is simply too weak for the expert matmuls, and it is *catastrophic* for prompt processing (6–7 t/s — a
-100 K-token coding context would take hours). ngram-mod stays off (spec gains vanish on real reasoning output). THREADS=16
-still has to be measured (re-run in chain 2). E2E rust/go/c/asm with these settings: chain step after the sweeps.
+100 K-token coding context would take hours). ngram-mod stays off (spec gains vanish on real reasoning output). **THREADS=16 wins for kat-q4** (34.0 vs 25.2 t/s,
+even under a 2400–3200 MHz cap) → `models.sh kat-q4` gets `MODEL_THREADS=16` before its E2E run; note that the same
+switch *loses* on `qwen35b-q8` (§5.2: 20.14 vs 21.45) **and** on `qwen35b-q4` (§2.2: 30.22 vs 31.56) — the same
+architecture at the same bit-width as KAT. That makes KAT's +35 % the outlier: `cpu19` (25.22, 10:47) and `cpu19-t16b`
+(34.02, 11:47) were 60 minutes and one cold power-off apart, both on ~630 generated tokens only. Until an A/B under one
+settle-guarded run (`cpu19b` 8 threads vs `cpu19-t16c` 16 threads, back-to-back) says otherwise, `MODEL_THREADS=16`
+stays for the kat-q4 E2E (worst case −4 % as on the Qwen files, best case +35 %); the A/B runs right after that E2E.
+E2E rust/go/c/asm with these settings: chain step after the sweeps.
 
 ## 5. `qwen35b-q8` — Qwen3.6-35B-A3B Q8_0 (36 903 140 320 B, `VERIFIED_OK` 00:52 after a curl short-read at 32.4 GB and a resume)
 
@@ -440,4 +455,23 @@ sweep and E2E: after the GPU boosts again. Even pinned, 7.3–8.0 t/s already si
 
 ### 5.2 Speed sweep — first attempt 13 Sep 11:03 INVALID (on battery since 10:58:07, §3.1.2): `cpu29` prompt 0 gave tg 4.26 /
 pp 23 t/s with the CPU at 1 GHz and the Quadro in P5; killed at 11:14. Re-run on mains: chain 2 (`~/local-ai-runs/t1-chain2.sh`).
+
+Re-run (chain 2, `sweep.sh qwen35b-q8`, 13 Sep 11:50–12:24, GPU healthy 60.23 t/s pin check at 11:44, AC on for every
+START/END line, no verification overlap). `codebench.py LABEL 2`, GAP 150 s. CSV: `~/local-ai-runs/sweep-qwen35b-q8.csv`.
+Q8 answers are long (1 651–2 048 tokens per prompt, the 2 048 cap hit on prompt 1 every time) so these tg values are
+measured over ~3 400–3 800 generated tokens per config — the most robust T1 numbers so far.
+
+| config | placement of the 29 expert layers | tg t/s (aggregate) | pp t/s (48 / 52-token prompts) | wall s (2 prompts) | START pch / cap | note |
+|---|---|---|---|---|---|---|
+| `cpu29` (`NCMOE=29`, THREADS 8) | CPU RAM | **21.45** (21.49 / 21.40) | 43 / 48 | 178 | 88 / 5300 | baseline = `models.sh` default; 3.6× the T1 goal, inside the T0 "ideal" band |
+| `cpu29-ngram` (`SPEC=ngram-mod`) | CPU RAM | 20.65 | 46 / 54 | 181 | 91 / 5300 | −4 % tg — ngram-mod is a loss on Q8 reasoning output too; off |
+| `igpu29` (`IGPU_MOE=29 NCMOE=0`) | iGPU (Vulkan1, shared RAM) | 6.36 | **4.0 / 5.1** | 552 | 93 / **2400** | tg −70 %, pp 10× slower. The START cap was 2400 (PCH 93 after the 37 GB load; turbo band back at ~12:11, so ≥ 7 of the 9 minutes ran at 5300) and the iGPU held 1150–1250 MHz (§3.4) — tainted but decisive: 29 Q8 expert layers on the P630 is a non-starter |
+| `cpu29-t16` (`THREADS=16`) | CPU RAM | 20.14 (20.00 / 20.24) | 37 / 54 | 190 | 87 / 5300 | −6 % tg, −15 % pp on prompt 0: 16 threads do **not** help Q8 (the 815 MiB/layer experts are memory-bandwidth bound; SMT only adds contention). Opposite of kat-q4 (§4.2) → THREADS stays 8 for `qwen35b-q8` |
+
+Conclusion for `qwen35b-q8`: **VRAM + CPU RAM (`NCMOE=29`, 8 threads, no spec) at 21.4 t/s**, pp 43–48 t/s. The Q8
+model is 3.2× larger on the expert side than UD-Q4 and still lands at 70 % of `qwen35b-q4`'s `cpu20` (30.7–31.6 t/s, §2.2)
+rather than at half: both are limited by DDR4 bandwidth for the expert reads per token (Q8 reads ~2× the bytes of Q4
+per expert layer, but 29 vs 20 offloaded layers and the 11 GPU-resident layers + attention identical for both blur the
+ratio). The iGPU/RAM split is dead for T1 (third model, same verdict: 16.2 / 16.8 / 6.4 t/s vs 31 / 25 / 21 on CPU RAM).
+E2E rust/go/c/asm: chain 2, after `qwen35b-q4` and `kat-q4`.
 

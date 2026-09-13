@@ -20,6 +20,9 @@ verify() { # file bytes sha256   (file may be NAME.part; the marker is written f
     read -r mb ms when < "$V/$name"
     [ "$mb" = "$2" ] && [ "$ms" = "$3" ] && { echo "verified earlier ($when, marker $V/$name): $1"; return 0; }
   fi
+  # size first: curl's exit status is hidden by the progress pipeline, so an early-ended .part reaches verify(); hashing a
+  # file of the wrong size is a pointless 5-10 min NVMe stream at PCH 100 C (13 Sep 11:59, 41 of 49.7 GB) - fail at once instead
+  [ "$size" = "$2" ] || { echo "VERIFY_FAIL $1: size=$size (want $2) - not hashing, re-run resumes the download"; return 1; }
   if [ -x "$d/verify-slow.py" ]; then sum=$(nice -n 20 "$d/verify-slow.py" "$1"); else sum=$(nice -n 20 sha256 -q "$1"); fi
   if [ "$size" = "$2" ] && [ "$sum" = "$3" ]; then echo "$2 $3 $(date '+%FT%T')" > "$V/$name"; return 0; fi
   echo "VERIFY_FAIL $1: size=$size (want $2) sha256=$sum (want $3)"; return 1

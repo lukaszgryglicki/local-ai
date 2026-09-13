@@ -4,9 +4,11 @@ Prints the hex digest on stdout (progress/pauses on stderr); with EXPECTED_SHA25
 
   --burst S    hash at full speed for S seconds ...            (default 40, env VERIFY_BURST)
   --cool S     ... then stop reading for S seconds             (default 15, env VERIFY_COOL)
-  --pch-hi C   safety net: pause when the PCH reaches C ...    (default 100, env VERIFY_PCH_HI; the PCH's own hw link
+  --pch-hi C   safety net: pause when the PCH reaches C ...    (default 88, env VERIFY_PCH_HI; was 100 until 13 Sep 12:05: a
+               40/15 duty cycle at full clocks hit 100 C four times in 4 min and tripped the watchdog cap; the PCH's own hw link
                                                                 throttle starts at 108 C, the watchdog suspends at 115)
-  --pch-lo C   ... until it is back at C                        (default 85, env VERIFY_PCH_LO)
+  --pch-lo C   ... until it is back at C                        (default 78, env VERIFY_PCH_LO; keeps the run under the
+               watchdog's 90 C turbo-band limit, so a verification never costs CPU clocks elsewhere)
   --mbps N     optional read-rate cap in MB/s, 0 = none        (default 0, env VERIFY_MBPS)
 
 asgard 2026-09-13: the PCH (CometLake-H, all four NVMe links + DMI hang off it, passively cooled) jumps ~8-10 C within
@@ -36,7 +38,7 @@ def pch():
 
 def parse(argv):
     opts = {"burst": float(os.environ.get("VERIFY_BURST", "40")), "cool": float(os.environ.get("VERIFY_COOL", "15")),
-            "pch-hi": float(os.environ.get("VERIFY_PCH_HI", "100")), "pch-lo": float(os.environ.get("VERIFY_PCH_LO", "85")),
+            "pch-hi": float(os.environ.get("VERIFY_PCH_HI", "88")), "pch-lo": float(os.environ.get("VERIFY_PCH_LO", "78")),
             "mbps": float(os.environ.get("VERIFY_MBPS", "0"))}
     args = []
     it = iter(argv)

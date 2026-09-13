@@ -5,7 +5,7 @@
 # Same host/port as tuxi's ../serve.sh (10.253.254.1:18080) and the extra alias qwen3coder-local,
 # so ../qwen.sh, ../health.sh, ../copilot.sh work unchanged on asgard; asgard/qwen.sh adds
 # per-model sampling. MODEL = qwen35b (T0 winner = `fastest-vram`, default) | qwen35b-q4 | kat-q4 | qwen35b-q8 (T1 candidates); asgard/models.sh.
-# Env overrides: NP slots (default 1; ctx = NP x 256K unless CTX given), CTX, THREADS (8),
+# Env overrides: NP slots (default 1; ctx = NP x 256K unless CTX given), CTX, THREADS (models.sh MODEL_THREADS, else 8),
 # THREADS_BATCH (16), NCMOE (--n-cpu-moe, default per model), SPEC (--spec-type, default per
 # model; SPEC=none for raw decode speed), DRAFT_KV (KV type of the MTP draft context, default q8_0; with f16 the
 # context-checkpoint read-back of the draft KV is one 2 KiB/token pinned staging buffer and the NVIDIA driver fails
@@ -52,7 +52,7 @@ exec "$B" --model "$d/../models/$MODEL_FILE" --alias "$MODEL_ALIAS,qwen3coder-lo
   --host 10.253.254.1 --port "${PORT:-18080}" \
   --ctx-size "$CTX" --parallel "$NP" --gpu-layers 99 --device "$DEV" --fit off $IGPU_ARGS $NCMOE_ARGS \
   --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --cache-ram "$MODEL_CACHE_RAM" \
-  --batch-size 2048 --ubatch-size 1024 --threads "${THREADS:-8}" --threads-batch "${THREADS_BATCH:-16}" \
+  --batch-size 2048 --ubatch-size 1024 --threads "${THREADS:-${MODEL_THREADS:-8}}" --threads-batch "${THREADS_BATCH:-16}" \
   --load-mode none --ctx-checkpoints 8 \
   --spec-type "${SPEC:-$MODEL_SPEC}" --spec-draft-n-max 6 --spec-draft-p-min 0.75 \
   --spec-draft-type-k "${DRAFT_KV:-q8_0}" --spec-draft-type-v "${DRAFT_KV:-q8_0}" \

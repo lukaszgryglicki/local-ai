@@ -25,6 +25,10 @@ for cfg in "$@"; do
   ./stop.sh >/dev/null 2>&1; "$d/wait-ac.sh"; "$d/wait-no-verify.sh" 5400; sleep "$GAP"   # never measure on battery or during a model verification (PCH -> CPU cap)
   up=$(env $envs SPEC=$spec EXTRA="$extra" ./start.sh "$M" 2>&1 | head -1 | cut -c1-160)
   case $up in UP*) ;; *) echo "$(date +%T) $label START_FAILED: $up"; echo "$label,START_FAILED" >> "$OUT"; continue;; esac
+  # settle: the model load (20-35 GB NVMe stream) heats the PCH; never bench while the watchdog holds the CPU below the full
+  # cap or PCH > 86 C (kat-q4 cpu19-t16b 13 Sep 11:47 ran at cap 2400-3200). Up to 180 s, logged when it had to wait.
+  n=0; while [ $n -lt 36 ] && { [ "$(cat /var/run/thermal-policy.ratio 2>/dev/null)" != 53 ] || [ "$(sysctl -n dev.pchtherm.0.temperature | cut -d. -f1)" -gt 86 ]; }; do sleep 5; n=$((n+1)); done
+  [ $n -gt 0 ] && echo "$(date +%T) $label settled $((n*5)) s (cap/PCH after the load)"
   echo "$(date +%T) $label START $(st) ac=$(sysctl -n hw.acpi.acline) | $up"
   if [ "${BENCH:-code}" = bench ]; then
     GEN=${GEN:-256} python3 bench.py "$label" ${DEPTHS:-64 4096} | tee -a "$OUT"

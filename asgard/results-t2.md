@@ -37,6 +37,17 @@ fallback, not queued. Disk: `zroot/data/local-ai` 1.6 TB free before the queue (
   queue restart re-hashed the finished shards — fixed 10:24: markers in `models/.verified/`, `verify-slow.py` duty-cycled
   hashing, `lockf` on the queue; details in results-t1.md §3.3). Shard 3 verified 10:29–10:4x by the closed-loop hasher
   (PCH 73–85 °C, ~50 MB/s effective). `qwen122b` (78.6 GB) is the first file hashed with the owner's 40 s / 15 s defaults.
+- **13 Sep 11:59–12:05 — first real `verify-slow.py` 40/15 run, verdict: too hot at full clocks, and it hashed the wrong thing.**
+  curl ended shard 2 early at 40.98 of 49.67 GB (short read, like Q8 yesterday); `fetch()` cannot see curl's exit status
+  behind the progress pipeline and went straight to `verify NAME.part`. verify-slow on the 38.2 GiB `.part` at ~500 MB/s:
+  first 40 s burst PCH 77 → 96 °C, then **SAFETY pauses at 100 °C at 12:01:05, 12:02:09, 12:03:08, 12:04:12** (each 25–30 s
+  back to 85) — and 100 °C is exactly the watchdog's HOT threshold, so it fired too: `HOT … pch 100 C -> cap 2200 MHz`
+  (12:04:11), recovery 12:06:27 → 5300 by ~12:08. Killed the hash at 12:05:3x (32.6/38.2 GiB, `VERIFY_FAIL` size) — it could
+  only have failed. Fixes: (1) `download.sh verify()` fails immediately on a size mismatch, no hash; (2) verify-slow safety
+  defaults **88/78 °C** (`VERIFY_PCH_HI/LO` still override) so the verifier throttles itself under the watchdog's 90 °C turbo
+  band and never costs CPU clocks elsewhere; burst/cool stay 40/15 (the safety net now does the pacing: expect ~25 s bursts).
+  The q8 sweep's `igpu29` config waited on `wait-no-verify.sh` the whole time, as designed. Shard 2 resumes on the queue's
+  next pass (download.sh continued with shard 3 first).
 
 ## 1. Build for Flash-Next — llama.cpp master b10936 + chunked-staging patch (`build-vulkan-master`, 07:13–07:17)
 

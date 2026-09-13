@@ -24,5 +24,5 @@ while :; do
   kill -0 "$(cat "$PID" 2>/dev/null)" 2>/dev/null || { echo "SERVER EXITED after $(( $(date +%s) - t0 )) s - last log lines:"; grep -vE "^\s*$" "$LOG" | tail -12 | cut -c1-200; echo "-- stderr ($OUT):"; tail -8 "$OUT" | cut -c1-200; exit 1; }
   sleep 1
 done
-echo "UP in $(( $(date +%s) - t0 )) s (pid $(cat "$PID")) | VRAM: $(nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader) | model=${1:-qwen35b} NP=${NP:-1} CTX=${CTX:-$((262144 * ${NP:-1}))} THREADS=${THREADS:-8}/${THREADS_BATCH:-16} NCMOE=${NCMOE:-default} SPEC=${SPEC:-default}"
+echo "UP in $(( $(date +%s) - t0 )) s (pid $(cat "$PID")) | VRAM: $(nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader) | model=${1:-qwen35b} NP=${NP:-1} CTX=${CTX:-$((262144 * ${NP:-1}))} THREADS=${THREADS:-default}/${THREADS_BATCH:-16} NCMOE=${NCMOE:-default} SPEC=${SPEC:-default}"
 grep -E "KV self size|KV size|compute buffer size|model buffer size|CPU_Mapped model buffer|Vulkan0 model buffer|Vulkan0 KV|n_ctx_seq|n_ctx_per_seq|slots|spec|draft|warning|error" | grep -v "^$" | cut -c1-160 | head -14

@@ -17,7 +17,7 @@
 # --cache-ram 0 where a single per-layer K or V copy of a 256K slot is >= 256 MiB (1088 B/token models) -
 # the NVIDIA driver's pinned-allocation windows; harmless since the chunked-staging build (build-vulkan-2).
 # Tier PROFILES (plan §10) are aliases that resolve to the frozen winner AND pin its winning knobs (NP/CTX/SPEC/NCMOE/
-# IGPU_MOE/THREADS - only where the environment does not set them), so `./start.sh vram`, `./llamactl.sh start t0`,
+# IGPU_MOE/THREADS - only where the environment does not set them; plain models may set MODEL_THREADS the same way), so `./start.sh vram`, `./llamactl.sh start t0`,
 # `MODEL=fastest-vram ./qwen.sh` keep working unchanged when later tiers change the plain defaults of serve.sh/start.sh:
 #   vram | t0 | fastest-vram  -> qwen35b, SPEC=none NP=1 CTX=262144 NCMOE=0 IGPU_MOE=0 THREADS=8 THREADS_BATCH=16 (frozen 13 Sep 2026)
 #   fast | t1                 -> not frozen yet (T1 in progress, results-t1.md)
@@ -30,7 +30,7 @@ model_env() {
       export NP CTX SPEC NCMOE IGPU_MOE THREADS THREADS_BATCH ;;
     fast|t1|best|t2) echo "profile '$1' is not frozen yet (T1 = results-t1.md in progress; T2 not started) - name a model instead" >&2; return 1 ;;
   esac
-  MODEL_NAME=$1 MODEL_DIR= MODEL_EXTRA= MODEL_BIN=   # MODEL_BIN = llama-server binary if not build-vulkan-2 (serve.sh); MODEL_DIR = repo sub-folder of sharded files; MODEL_EXTRA = 'shard:bytes:sha256 ...' beyond MODEL_FILE (shard 1, the one llama-server opens)
+  MODEL_NAME=$1 MODEL_DIR= MODEL_EXTRA= MODEL_BIN= MODEL_THREADS=   # MODEL_THREADS = per-model --threads default (env THREADS wins; serve.sh falls back to 8); MODEL_BIN = llama-server binary if not build-vulkan-2 (serve.sh); MODEL_DIR = repo sub-folder of sharded files; MODEL_EXTRA = 'shard:bytes:sha256 ...' beyond MODEL_FILE (shard 1, the one llama-server opens)
   case "$1" in
     qwen35b) # T0 WINNER = `fastest-vram` (frozen 13 Sep): Qwen3.6-35B-A3B UD-IQ2_M, non-MTP file; SPEC=none (ngram-mod costs 17 % here)
       MODEL_FILE=Qwen3.6-35B-A3B-UD-IQ2_M.gguf MODEL_ALIAS=qwen3.6-35b-a3b MODEL_TITLE='Qwen3.6-35B-A3B UD-IQ2_M'
@@ -48,7 +48,7 @@ model_env() {
       MODEL_FILE=Kwaipilot_KAT-Coder-V2.5-Dev-Q4_K_L.gguf MODEL_ALIAS=kat-coder-v2.5 MODEL_TITLE='KAT-Coder-V2.5-Dev Q4_K_L'
       MODEL_REPO=bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-GGUF MODEL_REV=d8f684f08d2950ea9d2db6a35ef7dada0707858b
       MODEL_BYTES=21768894880 MODEL_SHA256=bb0441b81a7cac064ae2fc139e6d4d0ef53dbdc8916ba117605070b7c03e455e
-      MODEL_SPEC=none MODEL_CACHE_RAM=8192 MODEL_NCMOE=19 MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}'
+      MODEL_SPEC=none MODEL_CACHE_RAM=8192 MODEL_NCMOE=19 MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}' MODEL_THREADS=16   # THREADS=16: 34.0 vs 25.2 t/s with 8 (sweep 13 Sep, results-t1.md §4.2); Q8 loses with 16, so per model
       MODEL_TEMP=1.0 MODEL_TOP_P=0.95 MODEL_TOP_K=20 MODEL_MIN_P=0.0 ;;     # KAT card thinking mode: temp 1.0, top_p 0.95, top_k 20; NCMOE=19 = fit ladder 13 Sep (15 267 MiB after 1st request)
     qwen35b-q8) # T1/T2 quality reference: Qwen3.6-35B-A3B Q8_0 (34.4 GiB), ~29 of 40 expert layers outside VRAM
       MODEL_FILE=Qwen3.6-35B-A3B-Q8_0.gguf MODEL_ALIAS=qwen3.6-35b-a3b-q8 MODEL_TITLE='Qwen3.6-35B-A3B Q8_0'

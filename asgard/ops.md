@@ -202,6 +202,20 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   resumes the `.part` via `--continue-at -`; the queue and chain 2 are restarted by hand after boot).
 - 13 Sep 11:33 — owner-requested driver reload (`kldunload nvidia-modeset` + `kldload nvidia-modeset`, both nvidia modules
   re-attached per dmesg): pin unchanged (16.49 t/s, 1035 MHz P2). Cold power-off procedure handed to the owner.
+- 13 Sep 11:36–11:43 — owner cold power-off (+ AC unplug + 30 s button hold). 11:43 queue (`dl-t2-queue.sh`), iGPU sampler and
+  chain 2 restarted; 11:44:10 pin check **HEALTHY** (60.23 t/s, 1935 MHz). Chain 2 → kat-q4 `cpu19-t16b`, q8 sweep, q4 variants,
+  depth bench, E2E q4 → kat → q8.
+- 13 Sep 11:59–12:07 — curl short-read on qwen122b shard 2 (41.0/49.7 GB) → download.sh hashed the `.part` with the 40/15 duty
+  cycle → PCH 100 °C ×4, watchdog cap 2200 (12:04:11–12:06:27). Killed verify-slow 13348 at 12:05; `download.sh verify()` now
+  fails on size before hashing; `verify-slow.py` safety defaults 100/85 → **88/78 °C** (results-t2.md §0). `sweep.sh` got a
+  post-load settle step (cap 5300 + PCH ≤ 86 before benching, ≤ 180 s) after kat-q4 `cpu19-t16b` ran at cap 2400–3200.
+
+- 13 Sep 11:50–12:24 — `qwen35b-q8` sweep on a healthy GPU: `cpu29` **21.45** t/s, `cpu29-ngram` 20.65, `igpu29` 6.36 (pp 4–5),
+  `cpu29-t16` 20.14 → CPU RAM, 8 threads, no spec (results-t1.md §5.2). kat-q4 `cpu19-t16b` 34.02 vs 25.22 with 8 threads (§4.2).
+  iGPU sampler during igpu29: 1150 MHz in 79 of 110 samples, 1250 in 7 → auto-boost confirmed twice, no pinning (§3.4).
+- 13 Sep 12:30 — per-model `MODEL_THREADS` added (`models.sh` init line, `serve.sh --threads "${THREADS:-${MODEL_THREADS:-8}}"`,
+  `start.sh` UP line prints `THREADS=default` when unset); `kat-q4` profile set to `MODEL_THREADS=16` before its E2E run.
+  Verified with `DRY=1 ./serve.sh kat-q4|qwen35b-q8` (16 / 8) and `THREADS=8 DRY=1 ./serve.sh kat-q4` (8 — env wins).
 
 ## 7. At the real end (when the research phase is over)
 
