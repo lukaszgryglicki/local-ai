@@ -248,6 +248,22 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   verifier hashed qwen122b shard 2 in the gap (done 14:07:37, PCH max 89, 8 safety pauses, no cap trip) → `MODEL_COMPLETE qwen122b`;
   queue moved on to `qwen122b-iq4` (57.7 GB). asm task started 14:08:04 (`wait-no-verify` held it ~1 min).
 
+- 13 Sep 18:08 — q4 asm task hit the 4 h cap (rc=124) → FAIL-task 0/4 (final `b64.s` does not assemble); 204K tokens generated,
+  depth 240K, no infra event. E2E `qwen35b-q4` complete: rust 4/5 spec-only, go 5/5, c 5/5, asm 0/4 (cap). Chain 2 → `wait-no-verify`
+  (iq4 shard 2 hashing in the gap) → pin check → `kat-q4` E2E (THREADS 16).
+
+- 13 Sep 19:24 — `QUEUE_DONE`: all T2 models on disk and verified (flashnext 87 GiB, qwen122b 83 GiB, qwen122b-iq4 57.7 GB;
+  iq4 shards 2+3 hashed in E2E gaps). `dl-t2-queue.sh` exited.
+- 13 Sep 19:45 — **verify-c.sh bug fixed**: it built its ASan binary *before* running the model's `make clean`; kat-q4's Makefile
+  `clean` removes `bignum-asan` → "no sanitizer binary", graded 2/5. Also `make test` was judged on its last 3 lines only (kat
+  runs `--selftest` first). Now: make/make test first (rc=0 + "selftest ok" anywhere), then strict + sanitizer builds. Re-ran on
+  every c project: kat-q4 → **PASS 5/5** (summary.txt regraded, old copy `summary.txt.prev-verify`); gemma/qwen9b/qwen35b/
+  qwen35b-q4 unchanged; north 2/5 → 4/5 (its 11 Sep summary predates the `srcs=bignum.c` rule — leftover `bignum_simple.c`
+  had broken the strict/ASan builds; regraded the same way, T0 decision unaffected: 419/420 arithmetic lines wrong).
+
+- 13 Sep 20:05 — E2E `kat-q4` complete: rust 5/5 (136 s), go 4/5 (Scanner 64 KB limit on the 6 MB line), c 5/5 (after the verifier
+  fix), asm 0/4 (two thinking-only answers, 32K output cap, no file). Pin check 63.01 t/s healthy → `qwen35b-q8` E2E started 20:08.
+
 ## 7. At the real end (when the research phase is over)
 
 - Boot start: remove `nostart` from the `KEYWORD` line of `asgard/rc.d/llama`, reinstall the stub

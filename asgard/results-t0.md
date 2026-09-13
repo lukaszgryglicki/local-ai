@@ -632,7 +632,7 @@ unchanged; this table adds how far each failure was from passing (e.g. gemma/nor
 | north | rust | FAIL-task 4/5 (functional: roundtrips) | 156 s | 11 / 14 / 1 | 23.0 (19.6–25.5) | 26K | tests=4, unsafe=0, roundtrips=0ok/18bad | — |
 | north *(superseded attempt 20260911-225430)* | rust | no summary (attempt lost - freeze/kill; see results-t0.md) | — | — | — | — | — | — |
 | north | go | FAIL-task 4/5 (functional: comparisons) | 16 min | 75 / 74 / 9 | 26.3 (12.1–53.6) | 56K | cmp=46ok/1bad | — |
-| north | c | FAIL-task 2/5 (functional: strict, selftest_asan, comparisons) | 38 min | 85 / 84 / 11 | 32.0 (11.7–56.1) | 101K | — | — |
+| north | c | FAIL-task 4/5 (functional: comparisons) | 38 min | 85 / 84 / 11 | 32.0 (11.7–56.1) | 101K | asserts=0, malloc/free=1/1, arith=FAIL rc=0, 419/420 lines wrong; first…, malformed=FAIL, empty=ok | — |
 | north | asm | FAIL-task 2/4 (functional: checks, make) | 29 min | 63 / 62 / 21 | 25.5 (9.5–47.9) | 132K | vectors=encode 0/700, decode 0/700 | — |
 | qwen35b | rust | **PASS 5/5** | 110 s | 14 / 14 / 3 | 45.8 (38.9–47.7) | 28K | tests=4, unsafe=0, roundtrips=18ok/0bad | — |
 | qwen35b | go | **PASS 5/5** | 256 s | 20 / 19 / 2 | 44.0 (39.3–48.7) | 37K | 6MB=ok, cmp=47ok/0bad | — |
@@ -643,3 +643,8 @@ unchanged; this table adds how far each failure was from passing (e.g. gemma/nor
 | qwen9b | c | FAIL-task 2/5 (functional: maketest, selftest_asan, comparisons) | 240 min | 81 / 317 / 42 | 14.3 (6.9–53.8) | 229K | asserts=0, malloc/free=7/11, arith=FAIL rc=1, 421/420 lines wrong; first…, malformed=FAIL, empty=ok | hit the wall-time cap |
 | qwen9b *(superseded attempt 20260912-060252)* | c | no summary (attempt lost - freeze/kill; see results-t0.md) | — | — | — | — | — | — |
 | qwen9b | asm | FAIL-task 2/4 (functional: checks, make) | 121 min | 101 / 127 / 35 | 15.7 (8.9–42.2) | 179K | vectors=encode 0/700, decode 0/700 | 2 resume(s), 2071 s downtime; agent said error_during_execution |
+
+*Regrade note (13 Sep 19:45):* `verify-c.sh` now runs the project's `make`/`make test` before its own strict and ASan builds
+(a Makefile `clean` could delete the verifier's binary) and every c project was re-verified with the current script. Only
+north changed: 2/5 → 4/5 (its 11 Sep verification compiled a leftover `bignum_simple.c`; with the `srcs=bignum.c` rule the
+strict/ASan builds pass, the arithmetic is still wrong on 419/420 lines). T0 ranking unchanged.

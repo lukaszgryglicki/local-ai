@@ -1,6 +1,6 @@
 #!/bin/sh
 # /data/local-ai/asgard/verify-c.sh [DIR] - independent verification of the bignum C project a model produced
-# (project in DIR/bignum/ or DIR itself). Strict compile (-std=c11 -Wall -Wextra -Werror -O2), make + make test,
+# (project in DIR/bignum/ or DIR itself). make + make test first, then strict compile (-std=c11 -Wall -Wextra -Werror -O2),
 # --selftest, an ASan/UBSan build, then byte-exact comparison against Python integers on fixed edge cases plus
 # 400 random lines (signed, up to 3 000 digits) fed through the sanitizer build, malformed-line handling and exit
 # status. Ends with a VERDICT line.
@@ -13,14 +13,17 @@ srcs=bignum.c   # the spec's build command names bignum.c only; other *.c files 
 others=$(ls *.c *.h 2>/dev/null | grep -v '^bignum\.c$' | tr '\n' ' ')
 echo "project: $P/ (bignum.c $(wc -l < bignum.c | tr -d ' ') lines${others:+; other files left behind: $others}; Makefile: $( [ -f Makefile ] && echo yes || echo MISSING); targets: $(grep -oE '^(all|test|clean):' Makefile 2>/dev/null | tr -d ':' | tr '\n' ' '))"
 echo "malloc/free calls in bignum.c: $(grep -cE '\b(malloc|calloc|realloc)\(' bignum.c) / $(grep -c '\bfree(' bignum.c) | assert() uses: $(grep -c 'assert(' bignum.c) | fixed buffers >= 1000: $(grep -cE '\[[0-9]{4,}\]' bignum.c)"
+# make first (13 Sep fix): the model's `make clean` may delete anything, including our sanitizer binary (kat-q4 did) -
+# build our own binaries only afterwards. `make test` passes when it exits 0 and prints "selftest ok" anywhere (not just
+# in its last 3 lines - kat-q4 ran --selftest first, then piped cases).
 rm -f bignum bignum-asan *.o
-cc -std=c11 -Wall -Wextra -Werror -O2 -o bignum $srcs 2>strict.err && { echo "strict build (-Werror): ok"; strictok=1; } || { echo "strict build (-Werror): FAIL"; head -15 strict.err; strictok=0; }
-cc -std=c11 -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -o bignum-asan $srcs 2>asan-build.err && { echo "sanitizer build: ok"; asanb=1; } || { echo "sanitizer build: FAIL"; head -10 asan-build.err; asanb=0; }
 if [ -f Makefile ]; then
   make clean >/dev/null 2>&1; make >make.out 2>&1 && [ -x bignum ] && { echo "make: ok"; makeok=1; } || { echo "make: FAIL"; tail -10 make.out; makeok=0; }
-  mt=$(make test 2>&1 | tail -3 | tr '\n' ' '); echo "make test: $(echo "$mt" | cut -c1-200)"
-  echo "$mt" | grep -q "selftest ok" && makete=1 || makete=0
+  mto=$(make test 2>&1); mtrc=$?; mt=$(echo "$mto" | tail -3 | tr '\n' ' '); echo "make test: rc=$mtrc $(echo "$mt" | cut -c1-200)"
+  [ "$mtrc" = 0 ] && echo "$mto" | grep -q "selftest ok" && makete=1 || makete=0
 else makeok=0; makete=0; fi
+cc -std=c11 -Wall -Wextra -Werror -O2 -o bignum $srcs 2>strict.err && { echo "strict build (-Werror): ok"; strictok=1; } || { echo "strict build (-Werror): FAIL"; head -15 strict.err; strictok=0; }
+cc -std=c11 -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -o bignum-asan $srcs 2>asan-build.err && { echo "sanitizer build: ok"; asanb=1; } || { echo "sanitizer build: FAIL"; head -10 asan-build.err; asanb=0; }
 [ -x bignum-asan ] && { st=$(./bignum-asan --selftest 2>&1 | tail -2 | tr '\n' ' '); echo "selftest under ASan/UBSan: $(echo "$st" | cut -c1-160)"; echo "$st" | grep -q "selftest ok" && ! echo "$st" | grep -qi "sanitizer\|runtime error" && selfok=1 || selfok=0; } || selfok=0
 cmpok=0
 if [ -x bignum-asan ]; then

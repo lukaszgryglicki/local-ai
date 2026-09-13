@@ -174,7 +174,7 @@ verifier's quality lines say *how good* the run was. The verifiers keep their ol
 | qwen35b-q4 | rust | FAIL-task 4/5 (spec-only: signature) | 155 s | 11 / 10 / 2 | 27.7 (22.3–31.8) | 26K | tests=4, unsafe=0, roundtrips=18ok/0bad | — |
 | qwen35b-q4 | go | **PASS 5/5** | 317 s | 14 / 17 / 3 | 26.9 (21.5–31.0) | 34K | 6MB=ok, cmp=47ok/0bad | — |
 | qwen35b-q4 | c | **PASS 5/5** | 54 min | 86 / 85 / 11 | 20.1 (16.7–26.1) | 110K | asserts=32, malloc/free=6/7, arith=420ok, malformed=ok, empty=ok | — |
-| qwen35b-q4 | asm | no verdict (running?) | — | — | — | — | — | — |
+| qwen35b-q4 | asm | FAIL-task 0/4 (functional: as+ld, nolibc, checks, make) | 240 min | — | 15.2 (12.4–27.5) | 240K | — | hit the wall-time cap |
 
 rust: wrote `fn reverse(s: &str) -> String` where the spec says `pub fn` — 4 unit tests, 18/18 round-trips (Polish, emoji,
 combining marks), no deps, `chars().rev()`; T0 `qwen35b` (IQ2_M) and gemma wrote `pub fn` under the same rule. The graded
@@ -185,6 +185,14 @@ c (14:01, 54 min): the longest T1 run so far — 86 turns, 85 tool calls, 11 too
 later 1–6K batches at 126–205 t/s). All 5 checks (make, make test, ASan self-test, 420 arithmetic comparisons, strict flags)
 passed; 32 asserts, malformed/empty input handled. The qwen122b shard-2 verification ran in the c→asm gap 14:01–14:07
 (46.3 GiB, hashing 98 s at 482 MB/s, 8 safety pauses at 88 °C, PCH max 89, no cap trip) — the yield mechanism works.
+
+asm (14:08–18:08, **FAIL-task 0/4, hit the 4 h cap** — same outcome as T0 `qwen35b` on this task): 62 turns, 25 model
+requests, 204K generated tokens in 3.7 h (15.2 t/s aggregate, 12.4 at the deep end), depth up to **240K tokens** (CTX 262144
+held, KV never truncated). Pattern: three *thinking-only* answers of 25–33K tokens each (27–33 min, no text, no tool call),
+then `b64.s` rewritten from scratch 7 times; the last version still does not assemble (`(%r10,%r8b)` as an index register,
+`or` register-type mismatch) and mixes ABIs (`SYS_WRITE = 4` FreeBSD, `SYS_READ = 0` / `SYS_EXIT = 60` Linux). No infra
+event: ac_drops=0, resumes=0, no cap trips during the run. Prefill of the 82K re-sent context ran at 387 t/s; small
+5–7K batches at 240K depth only 67–101 t/s (the §2.3 pp cliff).
 
 ## 3. Infra event — **AC power lost 23:10:41** (FAIL-infra; no model or run is charged with it)
 
@@ -490,6 +498,35 @@ architecture at the same bit-width as KAT. That makes KAT's +35 % the outlier: `
 settle-guarded run (`cpu19b` 8 threads vs `cpu19-t16c` 16 threads, back-to-back) says otherwise, `MODEL_THREADS=16`
 stays for the kat-q4 E2E (worst case −4 % as on the Qwen files, best case +35 %); the A/B runs right after that E2E.
 E2E rust/go/c/asm with these settings: chain step after the sweeps.
+
+### 4.3 E2E rust/go/c/asm (chain 2, `e2e-all.sh kat-q4`, 13 Sep 18:16–20:05, THREADS 16, pin check 64.00 t/s before)
+
+| model | task | grade | wall | turns / tool calls / errors | tg t/s (agg; min–max) | max depth | quality | notes |
+|---|---|---|---|---|---|---|---|---|
+| kat-q4 | rust | **PASS 5/5** | 136 s | 7 / 11 / 2 | 29.2 (27.7–31.1) | 26K | tests=4, unsafe=0, roundtrips=18ok/0bad | — |
+| kat-q4 | go | FAIL-task 4/5 (functional: comparisons) | 10 min | 14 / 36 / 2 | 24.8 (20.6–28.3) | 45K | cmp=46ok/1bad | — |
+| kat-q4 | c | **PASS 5/5** | 50 min | 38 / 108 / 24 | 20.3 (16.8–28.7) | 125K | asserts=2, malloc/free=5/4, arith=420ok, malformed=ok, empty=ok | — |
+| kat-q4 | asm | FAIL-task 0/4 (functional: no project) | 40 min | — | 18.3 (18.3–24.9) | 114K | — | — |
+
+- **rust PASS 5/5 in 136 s** (fastest of all models so far): `pub fn reverse`, 4 tests, 18/18 round-trips, 7 turns.
+- **go 4/5**: `bufio.Scanner` over stdin → `token too long` on the 6 MB single-line input (rc=1, no output) — the same
+  check that failed gemma and north; the Qwen family (qwen35b, qwen9b, qwen35b-q4) read the whole input and pass it.
+  46/47 comparisons otherwise byte-exact, vet/nodeps ok, 14 turns, 10 min.
+- **c PASS 5/5 after a verifier fix** (ops.md 19:45): the first grading said 2/5 because `verify-c.sh` built its ASan binary
+  before the project's `make clean`, and kat's Makefile `clean` removes `bignum-asan`; the `make test` check also looked
+  only at the last 3 output lines while kat prints `selftest ok` first. Re-verified with the fixed script: make, make test,
+  strict, ASan self-test, 420/420 arithmetic lines, malformed/empty input all ok. 38 turns, 108 tool calls, **24 tool
+  errors** (the noisiest run), 50 min, depth 125K, tg 20.3 aggregate (16.8 at the deep end).
+- **asm FAIL-task 0/4 (no project) in 40 min**: two requests, both *thinking only* — the first hit the 32 768-token output cap
+  (33 min at 18.3 t/s, no text, no tool call), qwen-code re-sent the context (101K prompt at 264 t/s), the second answer was
+  empty and the agent returned `success` with an empty result. No file written. Same task class as q4's 4 h loop and T0's
+  cap: x86-64 asm defeats every 35B-class model tried so far; the *manner* differs (kat gives up after one 32K thought, q4
+  loops for 4 h).
+- No infra event in any of the four runs (ac_drops 0, resumes 0, downtime 0).
+
+**kat-q4 vs qwen35b-q4 (same tasks, same day):** rust 5/5 vs 4/5 (q4's missing `pub`), go 4/5 vs 5/5, c 5/5 vs 5/5
+(kat: 38 turns/50 min, q4: 86 turns/54 min), asm 0/4 vs 0/4 (40 min vs 4 h). Speed at depth: kat 16.8–29 t/s, q4 12.4–32.
+The THREADS A/B (chain 3) decides whether kat's 16-thread setting is real; the E2E ran with it.
 
 ## 5. `qwen35b-q8` — Qwen3.6-35B-A3B Q8_0 (36 903 140 320 B, `VERIFIED_OK` 00:52 after a curl short-read at 32.4 GB and a resume)
 
