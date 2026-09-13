@@ -1,6 +1,6 @@
 #!/bin/sh
 # /data/local-ai/asgard/qwen.sh [qwen args] - qwen-code session against the asgard server (run on asgard).
-# MODEL=qwen35b (default; the frozen T-1 winner)|qwen35b-q4|kat-q4|qwen35b-q8 must match what asgard/serve.sh is serving: it sets
+# MODEL=qwen35b (default; the frozen T0 winner)|qwen35b-q4|kat-q4|qwen35b-q8 must match what asgard/serve.sh is serving: it sets
 # the model name shown in the UI and the per-model sampling (asgard/models.sh). Everything else as in
 # ../qwen.sh: throwaway HOME so the real qwen config is untouched, report_findings excluded (its JSON
 # schema breaks this llama build's grammar converter -> HTTP 400), no short client caps (lifetime cap

@@ -36,7 +36,7 @@ agent session costs ~0 (a few cents of electricity, 0 premium requests).
 | remote/ | yes | reference copies of the remote big-model server scripts: serve.sh, serve-new.sh (tuned, +MTP), serve-rpc.sh + start-rpc.sh (multi-node RPC, current production), rpc.md (step-by-step RPC runbook), qwen.sh, health.sh |
 | llama | yes | tiny launcher; libs load via RUNPATH from the POC build dir `/data/ai/local-agent-poc/src/llama.cpp/build-vulkan/bin` — keep that dir |
 | readme.md | yes | this file |
-| asgard/ | yes | **second box** (Dell Precision 7750: Xeon W-10885M, Quadro RTX 5000 16 GiB, 128 GiB DDR4, FreeBSD 15.1-STABLE): `asgard/plan.md` = hardware budget, tiered model shortlist (T-1/T0/T1/T2), configs, native Vulkan build incl. the clang-21 trap, test protocol, status; `asgard/research/*.md` = the raw research reports behind it (+ the `test-backend-ops` excerpt), `asgard/vkalloc.c` = the pinned-cap probe; **asgard variants of the scripts** (like local / remote / rpc before): `asgard/models.sh` (per-model file, HF rev, sha256, spec-type, cache-ram, sampling, thinking toggle), `asgard/serve.sh MODEL`, `asgard/download.sh MODEL`, `asgard/health.sh`, `asgard/qwen.sh` (`MODEL=…`), `asgard/bench.py`, `asgard/rust-test.sh MODEL` (the full test: qwen-code writes+tests a Rust string reverser, verified independently); `asgard/ops.md` = **how llama-server is run** (start/stop, the `service llama` stub → `asgard/llamactl.sh`, thermal-watchdog suspend hooks, zzz/resume contract, stall detector — settled 2026-09-12); `asgard/start.sh` / `stop.sh` / `llamactl.sh` / `rc.d/llama` (stub source) / `unstick.sh` (stall detector + watchdog hooks) / `zzz-probe.sh` (S3 probe) / `sweep.sh`, `e2e-*.sh`, `verify-*.sh` (the spec/fit sweeps and the four-task E2E harness, see results-t1.md); `asgard/status-2026-09-11.md` = end-of-groundwork report, `asgard/results-t1.md` = T-1 download/test log |
+| asgard/ | yes | **second box** (Dell Precision 7750: Xeon W-10885M, Quadro RTX 5000 16 GiB, 128 GiB DDR4, FreeBSD 15.1-STABLE): `asgard/plan.md` = hardware budget, tiered model shortlist (T0/T1/T2/T3), configs, native Vulkan build incl. the clang-21 trap, test protocol, status; `asgard/research/*.md` = the raw research reports behind it (+ the `test-backend-ops` excerpt), `asgard/vkalloc.c` = the pinned-cap probe; **asgard variants of the scripts** (like local / remote / rpc before): `asgard/models.sh` (per-model file, HF rev, sha256, spec-type, cache-ram, sampling, thinking toggle), `asgard/serve.sh MODEL`, `asgard/download.sh MODEL`, `asgard/health.sh`, `asgard/qwen.sh` (`MODEL=…`), `asgard/bench.py`, `asgard/rust-test.sh MODEL` (the full test: qwen-code writes+tests a Rust string reverser, verified independently); `asgard/ops.md` = **how llama-server is run** (start/stop, the `service llama` stub → `asgard/llamactl.sh`, thermal-watchdog suspend hooks, zzz/resume contract, stall detector — settled 2026-09-12); `asgard/start.sh` / `stop.sh` / `llamactl.sh` / `rc.d/llama` (stub source) / `unstick.sh` (stall detector + watchdog hooks) / `zzz-probe.sh` (S3 probe) / `sweep.sh`, `e2e-*.sh`, `verify-*.sh` (the spec/fit sweeps and the four-task E2E harness, see results-t0.md); `asgard/status-2026-09-11.md` = end-of-groundwork report, `asgard/results-t0.md` + `report-t0.md` = T0 (`fastest-vram`) log + report, `asgard/results-t1.md` = T1 (`fast`) log, `asgard/results-t2.md` = T2 (`best`) log; `asgard/build-vulkan-2.sh` / `build-vulkan-master.sh` = the patched v0.4.0 and master (b10936, Flash-Next) builds |
 | model.gguf | no (.gitignore) | Qwen3-Coder-30B-A3B-Instruct Q8_0, 30.25 GiB |
 | key.secret | no (.gitignore) | API key the server requires and clients send |
 | remote-host.secret, remote-key.secret | no (.gitignore) | remote main node ssh target + its API key |
@@ -287,28 +287,31 @@ GELI). Same repo checked out at `/data/local-ai`; same POC tree at
 `compression=off primarycache=metadata` recipe (`/data/ai` is a plain dir) and
 `vfs.zfs.arc.max=17179869184` (16 GiB) in `/etc/sysctl.conf` — with 128 GiB and
 no cap the ARC reached 88 GiB and the NVIDIA driver's pinned host allocations
-(what `--n-cpu-moe` experts live in) failed outright (asgard/results-t0.md §3.2).
+(what `--n-cpu-moe` experts live in) failed outright (asgard/results-t1.md §3.2).
 Status: llama.cpp v0.4.0 built natively with Vulkan, Quadro visible as
 `Vulkan0` with NV_coopmat2, `test-backend-ops` gate: 0 FAIL over every op
 (the full run only aborts at one synthetic 768 MiB upload — the driver cap
 below, not a kernel bug). Models: `/data/local-ai/models/*.gguf` (gitignored,
 on the dataset), fetched one at a time with `asgard/download.sh MODEL` and
 each put through the full test before the next download — see
-`asgard/results-t1.md`; the consolidated T-1 report (winner `qwen35b`, scoreboard, incidents, frozen config) is
-**`asgard/report-t1.md`**. Everything else, incl. the ranked shortlist (T-1
-North-Mini-Code / Qwen3.5-9B / Gemma-4-26B-A4B, T0 Qwen3.6-35B-A3B, T0b
-KAT-Coder, T1, T2 Qwen3.8-Flash-Next), is in `asgard/plan.md`; the
-end-of-groundwork report is `asgard/status-2026-09-11.md`.
+`asgard/results-t0.md`; the consolidated T0 report (winner `qwen35b`, scoreboard, incidents, frozen config) is
+**`asgard/report-t0.md`**. Everything else, incl. the ranked shortlist (T0
+North-Mini-Code / Qwen3.5-9B / Gemma-4-26B-A4B, T1 Qwen3.6-35B-A3B, T1b
+KAT-Coder, T2, T3 Qwen3.8-Flash-Next), is in `asgard/plan.md`; the
+end-of-groundwork report is `asgard/status-2026-09-11.md`. Tier numbering since 13 Sep 2026: T0 =
+`fastest-vram`, T1 = `fast`, T2 = `best`, T3 = optional (commits up to `Update status 9` said T-1/T0/T1/T2 for the same tiers,
+with `results-t1.md`/`report-t1.md` for what is now the T0 phase — the files were swapped when renumbering).
 
-Serving on asgard: `asgard/serve.sh` (default `qwen35b` = the frozen T-1
-`fastest-vram` winner, Qwen3.6-35B-A3B UD-IQ2_M; T0 candidates `qwen35b-q4` /
+Serving on asgard: `asgard/serve.sh` (default `qwen35b` = the frozen T0
+`fastest-vram` winner, Qwen3.6-35B-A3B UD-IQ2_M — also selectable as the profile `vram` / `t0` / `fastest-vram`, which pins
+the winning knobs; T1 candidates `qwen35b-q4` /
 `kat-q4` / `qwen35b-q8`; `NP=` slots, `THREADS=`, `NCMOE=` overrides) — same
 `10.253.254.1:18080` + alias `qwen3coder-local` as tuxi, so the top-level
 `qwen.sh`/`health.sh`/`copilot.sh` also work there; `MODEL=qwen35b
-asgard/qwen.sh` adds the model's own sampling. T-1: all weights + 256K q8_0 KV
-in Quadro VRAM (`--gpu-layers 99 --device Vulkan0`, X on the iGPU); T0 adds
-`--n-cpu-moe N` (expert layers in CPU RAM). The other T-1 candidates (North,
-Qwen3.5-9B, Gemma-4) were removed on 13 Sep 2026 — see `asgard/report-t1.md` §8.
+asgard/qwen.sh` adds the model's own sampling. T0: all weights + 256K q8_0 KV
+in Quadro VRAM (`--gpu-layers 99 --device Vulkan0`, X on the iGPU); T1 adds
+`--n-cpu-moe N` (expert layers in CPU RAM). The other T0 candidates (North,
+Qwen3.5-9B, Gemma-4) were removed on 13 Sep 2026 — see `asgard/report-t0.md` §8.
 
 Running it (2026-09-12, settled in **`asgard/ops.md`**): `asgard/start.sh MODEL`
 (daemonizes serve.sh, waits for `/health`, remembers the start in

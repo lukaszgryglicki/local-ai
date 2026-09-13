@@ -1,0 +1,28 @@
+# test-backend-ops test -b Vulkan0, llama.cpp master b10936 + chunked-staging patch (build-vulkan-master), asgard 2026-09-13 07:20-07:44, GPU pinned at 1035 MHz (irrelevant for correctness)
+# summary: 18761 OK / 0 FAIL / 3928 not supported; the f32 MUL_MAT_ID_FUSION uploads (768 MiB) that SIGABRTed the v0.4.0 build on 11 Sep now pass
+ggml_vulkan: Found 2 Vulkan devices:
+ggml_vulkan: 0 = Quadro RTX 5000 (NVIDIA) | uma: 0 | fp16: 1 | bf16: 1 | fp4: 0 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: NV_coopmat2
+ggml_vulkan: 1 = Intel(R) UHD Graphics P630 (CML GT2) (Intel open-source Mesa driver) | uma: 1 | fp16: 1 | bf16: 0 | fp4: 0 | warp size: 32 | shared memory: 49152 | int dot: 0 | matrix cores: none
+Testing 3 devices
+
+...
+  MUL_MAT_ID_FUSION(type_a=f32,type_b=f32,n_mats=128,n_used=8,b=0,m=768,n=1,k=2048,o=1,mul=1): OK
+  MUL_MAT_ID_FUSION(type_a=f32,type_b=f32,n_mats=128,n_used=8,b=0,m=768,n=4,k=2048,o=1,mul=1): OK
+  MUL_MAT_ID_FUSION(type_a=f32,type_b=f32,n_mats=128,n_used=8,b=0,m=768,n=512,k=2048,o=1,mul=1): OK
+...
+  LIGHTNING_INDEXER(hsk=128,nh=64,kv=65,nb=32,ns=4,nm=1,type_K=f16): OK
+  LIGHTNING_INDEXER(hsk=128,nh=64,kv=65,nb=32,ns=4,nm=1,type_K=bf16): OK
+  LIGHTNING_INDEXER(hsk=128,nh=64,kv=65,nb=32,ns=4,nm=1,type_K=q8_0): OK
+  LIGHTNING_INDEXER(hsk=128,nh=64,kv=65,nb=32,ns=4,nm=1,type_K=q5_1): OK
+  LIGHTNING_INDEXER(hsk=128,nh=64,kv=65,nb=32,ns=4,nm=1,type_K=q5_0): OK
+  LIGHTNING_INDEXER(hsk=128,nh=64,kv=65,nb=32,ns=4,nm=1,type_K=q4_1): OK
+  LIGHTNING_INDEXER(hsk=128,nh=64,kv=65,nb=32,ns=4,nm=1,type_K=q4_0): OK
+  18759/18759 tests passed
+Running FA vec slice tests (env LLAMA_TEST_FA_VEC_DISABLE=1 to skip)
+  Backend Vulkan0: OK
+Backend 2/3: Vulkan1
+  Skipping
+Backend 3/3: CPU
+  Skipping
+3/3 backends passed
+OK

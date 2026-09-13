@@ -1,26 +1,26 @@
-# asgard T-1 report — the `fastest-vram` profile (2026-09-11 → 2026-09-12)
+# asgard T0 report — the `fastest-vram` profile (2026-09-11 → 2026-09-12)
 
 **Result: `qwen35b` = Qwen3.6-35B-A3B UD-IQ2_M (unsloth, non-MTP file), whole model + 256K q8_0 KV in the Quadro RTX 5000,
 NP=1, `--spec-type none`, `--cache-ram 8192`, patched `build-vulkan-2`.** It won the four-task coding E2E 2/4 + a near-miss
 against North-Mini-Code (0/4), Qwen3.5-9B+MTP (1/4) and Gemma-4-26B-A4B (1/4), at 35–46 t/s session aggregate (worst single
-request 18 t/s at 230K context) — above the T-1 goal of > 12 t/s (ideal 15–25). It is frozen as the default of `start.sh`,
+request 18 t/s at 230K context) — above the T0 goal of > 12 t/s (ideal 15–25). It is frozen as the default of `start.sh`,
 `serve.sh`, `qwen.sh`, `llamactl.sh` and therefore of `sudo service llama start`.
 
 This is the consolidated report. The chronological working log with every number, log excerpt and dead end is
-`results-t1.md`; the plan and shortlist are `plan.md`; how the box is operated is `ops.md`. All three are in this directory.
+`results-t0.md`; the plan and shortlist are `plan.md`; how the box is operated is `ops.md`. All three are in this directory.
 
-## 1. What T-1 means and what was required
+## 1. What T0 means and what was required
 
 `plan.md` §10 (owner, 12 Sep 11:14–11:24) defines three serving profiles, each = the tier's best model *by the E2E coding
 tasks* in its best configuration *by the sweeps*:
 
 | profile | tier | placement | generation-speed goal (output t/s, session aggregate) |
 |---|---|---|---|
-| **`fastest-vram`** | **T-1** | everything in the 16 GiB Quadro: weights, 262 144-token q8_0 KV, compute buffers | **> 12, never < 10, ideal 15–25** |
-| `fast` | T0 | VRAM first, overflow to the Intel iGPU (Vulkan1) or CPU RAM — whichever measures faster | ≥ 6, minimum 4, ideal 7–10 |
-| `best` | T1 (T2 optional) | as much as fits across VRAM + iGPU + RAM, whichever split is fastest | ≥ 1.8, minimum 1, ideal > 3 |
+| **`fastest-vram`** | **T0** | everything in the 16 GiB Quadro: weights, 262 144-token q8_0 KV, compute buffers | **> 12, never < 10, ideal 15–25** |
+| `fast` | T1 | VRAM first, overflow to the Intel iGPU (Vulkan1) or CPU RAM — whichever measures faster | ≥ 6, minimum 4, ideal 7–10 |
+| `best` | T2 (T3 optional) | as much as fits across VRAM + iGPU + RAM, whichever split is fastest | ≥ 1.8, minimum 1, ideal > 3 |
 
-Hard requirements applied to every T-1 candidate: the **full native context (262 144 tokens per slot)**, thinking on
+Hard requirements applied to every T0 candidate: the **full native context (262 144 tokens per slot)**, thinking on
 (effort max where the template has such a knob), GPU-only (`--gpu-layers 99 --device Vulkan0 --fit off`), q8_0 K and V,
 flash attention, no YaRN, `--parallel` as high as fits (4 → 3 → 2 → 1), the model card's sampling. Speed is *recorded* for
 prompts too, but only output speed is a selection criterion, and it must hold **at depth** (a model must clear the floor
@@ -38,7 +38,7 @@ Dell Precision 7750: Xeon W-10885M (8C/16T, Comet Lake, AVX2), **Quadro RTX 5000
 15.1-STABLE, GELI. llama.cpp = the POC fork v0.4.0 `5266f24`, native Vulkan build; from 12 Sep 14:40 the patched
 `build-vulkan-2` (see §7.3). Model files on the `zroot/data/local-ai` dataset (`primarycache=all` since 11 Sep 21:2x, so a
 restart reloads 11 GB from ARC in ~10 s; **reverted to `metadata` + a 16 GiB ARC cap on 13 Sep 01:05** — an unlimited ARC
-starved the NVIDIA pinned host buffers that T0 needs, results-t0.md §3.2).
+starved the NVIDIA pinned host buffers that T1 needs, results-t1.md §3.2).
 
 Thermal regime during all tests (unchanged since the owner's 11 Sep 21:26 decision): `thermal_policy` "turbo band" — the
 CPU cap follows the hottest core between 5.3 GHz (≤ 70 °C) and 2.4 GHz (≥ 85 °C), no turbo while PCH ≥ 85 °C or NVMe
@@ -74,7 +74,7 @@ All four verifiers were validated against my own reference implementations befor
 
 ## 4. Candidates
 
-Shortlist from `plan.md` §4 (two wide model sweeps, ~20 labs, sizes re-fetched from HF 11 Sep). The T-1 constraint —
+Shortlist from `plan.md` §4 (two wide model sweeps, ~20 labs, sizes re-fetched from HF 11 Sep). The T0 constraint —
 weights + 256K q8_0 KV + compute ≤ 16 GiB — leaves only small MoEs and ≤ 9B dense models at ≤ 11–12 GiB of weights:
 
 | name | model | file (GiB) | why |
@@ -84,9 +84,9 @@ weights + 256K q8_0 KV + compute ≤ 16 GiB — leaves only small MoEs and ≤ 9
 | `gemma` | **Gemma-4-26B-A4B-it** (generalist, LCB 77 / SWE-V 57) | UD-IQ3_S 10.6 | the alternative if North's 3-bit quality disappoints |
 | `qwen35b` | **Qwen3.6-35B-A3B** (SWE-V 73 / LCB 80 class), non-MTP file | UD-IQ2_M 10.7 | "test-only": a 35B-A3B entirely in VRAM with 2-bit experts — quality unknown |
 
-Rejected for T-1 with reasons in `plan.md` §4: Qwen3.6/3.8-27B dense (KV 8.5 GiB at 262K on top of 16.4 GiB weights),
+Rejected for T0 with reasons in `plan.md` §4: Qwen3.6/3.8-27B dense (KV 8.5 GiB at 262K on top of 16.4 GiB weights),
 gpt-oss-20b (128K), Nemotron-3.5-Lightning / Cascade-2 (no i-quant file fits: `moe_intermediate 1856`), Qwen3-Coder
-(non-thinking), everything ≥ 122B (T1/T2 material).
+(non-thinking), everything ≥ 122B (T2/T3 material).
 
 ## 5. Results per model
 
@@ -129,7 +129,7 @@ model re-emits a whole file with small edits (45–54 t/s), 0–10 % on short to
 | asm | 87 min net (121 min wall; 2 071 s of server downtime excluded) | 130 | 15.7 (8.9–42.2) | 179.8K | **FAIL-task**: an incoherent 160-line encoder that segfaults, then a repetition loop that qwen-code halted. The two llama-server SIGABRTs at 12:21 and 12:43 during this task are **FAIL-infra** (§7.3), excluded from the timing |
 
 qwen9b = **1 / 4**. It does not fake anything (the C session is the proof: hours of real build-test-fix), but it is too
-weak for the hard tasks, and it is the only candidate whose speed **misses the T-1 floor at depth**: 8.5–10 t/s at 100K,
+weak for the hard tasks, and it is the only candidate whose speed **misses the T0 floor at depth**: 8.5–10 t/s at 100K,
 6.9 t/s at 200K, although the session aggregates (15.7–26.8) pass. It also needs the MTP head to be competitive at all.
 
 ### 5.3 Gemma-4-26B-A4B-it UD-IQ3_S
@@ -186,14 +186,14 @@ generated tokens in the asm session alone, zero restarts, zero FAIL-infra.
 | pp t/s aggregate | 591–1 067 | 256–795 | 233–599 | 214–666 |
 | deepest context reached | 132.8K | 229.1K | 141.8K | 234.6K |
 | VRAM at NP=1 (MiB / 16 384) | 15 623 | 15 337 | 14 545 | **14 099** |
-| T-1 speed goal (> 12, never < 10, ideal 15–25) | met | aggregate met, **floor missed at depth** | exceeded | **exceeded at every depth** |
+| T0 speed goal (> 12, never < 10, ideal 15–25) | met | aggregate met, **floor missed at depth** | exceeded | **exceeded at every depth** |
 | spec decoding | `ngram-mod` (+, 17–63 % acc.) | `draft-mtp,ngram-mod` (×1.8–2) | neutral | **`none`** (n-gram −17 %) |
 
 **Decision: `qwen35b`.** Same score as nobody, one point ahead of gemma/qwen9b, the only real agentic behaviour, the best
 fit (2.3 GiB headroom, so `--cache-ram 8192` is affordable), and speed well inside the goal at 230K context. gemma is the
 faster decoder but blind; qwen9b is honest but weak and too slow at depth; North last.
 
-Facts that shape the next tiers: **no T-1 model fits NP=2** at 262K per slot (the second KV never fits — a single slot
+Facts that shape the next tiers: **no T0 model fits NP=2** at 262K per slot (the second KV never fits — a single slot
 is a property of the tier, not of a model); speculation helps dense models and hurts this MoE family; the CPU's clock
 matters for GPU-only decode (graph launch path) — the turbo band handles it.
 
@@ -234,16 +234,16 @@ harmless.
 |---|---|
 | `models.sh` `qwen35b` | `Qwen3.6-35B-A3B-UD-IQ2_M.gguf` @ `a483e9e` (sha256 verified), `MODEL_SPEC=none`, `MODEL_CACHE_RAM=8192`, `MODEL_NCMOE=0`, `enable_thinking: true`, temp 1.0 / top-p 0.95 / top-k 20 / min-p 0 |
 | `serve.sh` | `B=` = `build-vulkan-2/bin/llama-server`; `--ctx-size 262144 --parallel 1 --gpu-layers 99 --device Vulkan0 --fit off --flash-attn on --cache-type-k/v q8_0 --cache-ram 8192 -b 2048 -ub 1024 --ctx-checkpoints 8 --spec-type none --jinja --reasoning on --reasoning-budget -1`, binds `10.253.254.1:18080` |
-| defaults | `start.sh` / `serve.sh` / `qwen.sh` / `llamactl.sh DEFAULT_MODEL` = `qwen35b` → `sudo service llama start` (or `./start.sh`) brings up the T-1 profile; verified 21:46: UP in 5 s, 14 099 MiB, `--spec-type none`, then `./stop.sh` |
+| defaults | `start.sh` / `serve.sh` / `qwen.sh` / `llamactl.sh DEFAULT_MODEL` = `qwen35b` → `sudo service llama start` (or `./start.sh`) brings up the T0 profile; verified 21:46: UP in 5 s, 14 099 MiB, `--spec-type none`, then `./stop.sh` |
 | freeze (13 Sep 00:30) | only `qwen35b` kept — North / Qwen3.5-9B / Gemma-4 GGUFs deleted (32.8 GB freed), their `models.sh` entries removed (git history), defaults in `serve.sh`/`qwen.sh`/`llamactl.sh`/`e2e-*.sh`/`download.sh` all point at `qwen35b`; run artifacts kept (`sweep-*.csv`, `e2e-*.log`, `/data/ai/*-task-{north,qwen9b,gemma}/`) |
 | use | `sudo service llama start [MODEL]` / `stop` / `status`; `asgard/qwen.sh [--yolo] …` (qwen-code preconfigured with the model's sampling); `asgard/health.sh`; per-model overrides via environment: `NP CTX THREADS NCMOE IGPU_MOE SPEC EXTRA` |
 
-## 9. Open items and what T0 starts from
+## 9. Open items and what T1 starts from
 
-- T0 candidates queued for download 12 Sep 21:52 (`models.sh`: `qwen35b-q4` = UD-Q4_K_XL 20.8 GiB, `kat-q4` = KAT-Coder-V2.5-Dev
+- T1 candidates queued for download 12 Sep 21:52 (`models.sh`: `qwen35b-q4` = UD-Q4_K_XL 20.8 GiB, `kat-q4` = KAT-Coder-V2.5-Dev
   Q4_K_L 20.3 GiB, `qwen35b-q8` = Q8_0 34.4 GiB). Each needs a fit ladder (how many expert layers must leave VRAM), the
   **iGPU-vs-RAM placement sweep** (`IGPU_MOE=k` vs `NCMOE=k`; serve.sh has both, per-model defaults `MODEL_IGPU_MOE` /
-  `MODEL_NCMOE`), the spec sweep, then the same four-task E2E. Results go to `results-t0.md`.
+  `MODEL_NCMOE`), the spec sweep, then the same four-task E2E. Results go to `results-t1.md`.
 - Untested: whether gemma's `--cache-ram 0` could be lifted now that staging is chunked; the exact driver mechanism behind
   the 2^n allocation windows; North at its 500K native context (needs ~18 expert layers off the GPU).
 - Everything under `/data/local-ai` is uncommitted since "Update status 6" — `git add -A && git commit` when convenient
@@ -252,7 +252,7 @@ harmless.
 
 ## 10. Artifact index
 
-- Docs: `results-t1.md` (full log; §5 = verdict), `plan.md` (§4 shortlist, §10 profiles/goals), `ops.md` (§6 verification log),
+- Docs: `results-t0.md` (full log; §5 = verdict), `plan.md` (§4 shortlist, §10 profiles/goals), `ops.md` (§6 verification log),
   `status-2026-09-11.md`, `asgard-thermal-report-20260911.md` (thermal, in `asgard-cfg` on tuxi).
 - Scripts: `models.sh serve.sh start.sh stop.sh llamactl.sh rc.d/ qwen.sh health.sh download.sh sweep.sh codebench.py bench.py
   e2e-all.sh e2e-test.sh e2e-tasks.sh e2e-vectors.py verify-{rust,go,c,asm}.sh unstick.sh telemetry.sh verify-staging.sh

@@ -3,7 +3,8 @@
 # /usr/local/etc/rc.d/llama is a stub that only calls this file (sudo service llama start|stop|restart|status), so during
 # the research phase only this file (and start.sh / serve.sh / models.sh behind it) changes; it is never in the boot
 # sequence (rc.d KEYWORD nostart). Always runs as SERVICE_USER: invoked as root it re-executes itself via su -l.
-#   start [MODEL]  MODEL given (qwen35b = frozen T-1 winner; T0 candidates qwen35b-q4|kat-q4|qwen35b-q8; asgard/models.sh) -> asgard/start.sh MODEL with that model's
+#   start [MODEL]  MODEL given (qwen35b = frozen T0 winner, also as profile vram|t0|fastest-vram = the winning knobs pinned; T1 candidates
+#                  qwen35b-q4|kat-q4|qwen35b-q8; asgard/models.sh) -> asgard/start.sh MODEL with that model's
 #                  defaults (NP=1, ctx 262144, per-model spec/cache-ram); knobs (NP= CTX= SPEC= NCMOE= IGPU_MOE= ...)
 #                  pass through the environment when run as the user, e.g. NP=2 ./llamactl.sh start qwen35b
 #                  no MODEL -> replay the last start, whoever made it (start.sh --last, ~/local-ai-runs/last-start.env),
@@ -15,7 +16,7 @@
 #   status         pid, how it was started, /health, /props, /slots - metadata only (asgard/health.sh sends a real
 #                  completion: never while a task runs, with NP=1 it would evict the task's cache)
 SERVICE_USER=lgryglicki
-DEFAULT_MODEL=qwen35b   # T-1 winner, 12 Sep 2026 (results-t1.md §5)
+DEFAULT_MODEL=qwen35b   # T0 winner, 12 Sep 2026 (results-t0.md §5)
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 d=$(dirname "$(realpath "$0")"); MODE=${1:-status}; [ $# -gt 0 ] && shift
 if [ "$(id -un)" != "$SERVICE_USER" ]; then

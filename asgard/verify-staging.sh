@@ -1,7 +1,7 @@
 #!/bin/sh
 # verify-staging.sh old|new [f16|q8_0] - reproduce / verify the ">= 256 MiB pinned staging" llama-server abort
-# (results-t1.md "FAIL-infra 12:21 + 12:43") on a SIDE server (port 18082 (SIDE_PORT)), never while an E2E task runs (it is a full
-# qwen9b server: ~15 GiB VRAM; qwen9b was removed on 13 Sep when T-1 froze - re-add its models.sh entry from git history or set MODEL=). Flow = the 12:43 crash: fresh server, one long chat prompt (~135K tokens, many user
+# (results-t0.md "FAIL-infra 12:21 + 12:43") on a SIDE server (port 18082 (SIDE_PORT)), never while an E2E task runs (it is a full
+# qwen9b server: ~15 GiB VRAM; qwen9b was removed on 13 Sep when T0 froze - re-add its models.sh entry from git history or set MODEL=). Flow = the 12:43 crash: fresh server, one long chat prompt (~135K tokens, many user
 # turns -> context checkpoints at user-message starts), short answer, then a follow-up request that appends to the same
 # context (checkpoint over the whole contiguous range). Draft KV f16 (2 KiB/token) unless given; the sysmem flag unset.
 #   old = build-vulkan   (unpatched) -> expected: SIGABRT "Memory allocation of size ... failed" at >= 131 072 tokens
