@@ -172,11 +172,19 @@ verifier's quality lines say *how good* the run was. The verifiers keep their ol
 | model | task | grade | wall | turns / tool calls / errors | tg t/s (agg; min–max) | max depth | quality | notes |
 |---|---|---|---|---|---|---|---|---|
 | qwen35b-q4 | rust | FAIL-task 4/5 (spec-only: signature) | 155 s | 11 / 10 / 2 | 27.7 (22.3–31.8) | 26K | tests=4, unsafe=0, roundtrips=18ok/0bad | — |
-| qwen35b-q4 | go | no verdict (running?) | — | — | — | — | — | — |
+| qwen35b-q4 | go | **PASS 5/5** | 317 s | 14 / 17 / 3 | 26.9 (21.5–31.0) | 34K | 6MB=ok, cmp=47ok/0bad | — |
+| qwen35b-q4 | c | **PASS 5/5** | 54 min | 86 / 85 / 11 | 20.1 (16.7–26.1) | 110K | asserts=32, malloc/free=6/7, arith=420ok, malformed=ok, empty=ok | — |
+| qwen35b-q4 | asm | no verdict (running?) | — | — | — | — | — | — |
 
 rust: wrote `fn reverse(s: &str) -> String` where the spec says `pub fn` — 4 unit tests, 18/18 round-trips (Polish, emoji,
 combining marks), no deps, `chars().rev()`; T0 `qwen35b` (IQ2_M) and gemma wrote `pub fn` under the same rule. The graded
 scale exists for exactly this case: a 4/5 spec-only miss, not a broken program.
+
+c (14:01, 54 min): the longest T1 run so far — 86 turns, 85 tool calls, 11 tool errors, depth up to **110K tokens**
+(CTX 131072 held; tg fell from 26 to 16.7 t/s at the deep end, 20.1 aggregate; the 23K system prompt prefilled at 565 t/s,
+later 1–6K batches at 126–205 t/s). All 5 checks (make, make test, ASan self-test, 420 arithmetic comparisons, strict flags)
+passed; 32 asserts, malformed/empty input handled. The qwen122b shard-2 verification ran in the c→asm gap 14:01–14:07
+(46.3 GiB, hashing 98 s at 482 MB/s, 8 safety pauses at 88 °C, PCH max 89, no cap trip) — the yield mechanism works.
 
 ## 3. Infra event — **AC power lost 23:10:41** (FAIL-infra; no model or run is charged with it)
 

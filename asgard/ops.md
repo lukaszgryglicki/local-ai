@@ -244,6 +244,10 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   48 layers, experts 55.43 GiB (1.16 GiB/layer, IQ4_NL/IQ3_S/IQ4_XS), `per_layer_token_embd` 26.82 GiB (IQ4_NL, CPU side),
   12 full-attention + 36 SSM layers, no MTP tensors → `SPEC=none` stays.
 
+- 13 Sep 14:01–14:08 — q4 c task PASS 5/5 (54 min, depth 110K). `busy-waiter.sh` removed `e2e.busy` at 14:01:12; the yielding
+  verifier hashed qwen122b shard 2 in the gap (done 14:07:37, PCH max 89, 8 safety pauses, no cap trip) → `MODEL_COMPLETE qwen122b`;
+  queue moved on to `qwen122b-iq4` (57.7 GB). asm task started 14:08:04 (`wait-no-verify` held it ~1 min).
+
 ## 7. At the real end (when the research phase is over)
 
 - Boot start: remove `nostart` from the `KEYWORD` line of `asgard/rc.d/llama`, reinstall the stub
