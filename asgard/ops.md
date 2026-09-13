@@ -217,6 +217,15 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   `start.sh` UP line prints `THREADS=default` when unset); `kat-q4` profile set to `MODEL_THREADS=16` before its E2E run.
   Verified with `DRY=1 ./serve.sh kat-q4|qwen35b-q8` (16 / 8) and `THREADS=8 DRY=1 ./serve.sh kat-q4` (8 — env wins).
 
+- 13 Sep 12:39–12:50 — `qwen35b-q4` depth bench valid (settle waited 80 s): pp 831/758/412/195, tg 32.5/33.0/26.6/22.9 t/s at
+  2K/15K/50K/66.5K tokens (results-t1.md §2.3). Finding: the CPU idles (7 W) during prefill — expert weights are streamed to the
+  GPU for batched pp; pp cliff past ~50K tokens (≈ 75 t/s marginal) noted for a later NCMOE-headroom test.
+- 13 Sep 12:52 — pin check 61.19 t/s / 1935 MHz → E2E `qwen35b-q4` started (chain 2). rust: 155 s, **FAIL-task** (`fn reverse`
+  instead of the spec's `pub fn reverse`; build/tests/round-trips all OK). go waits behind the shard-3 verification (guard).
+- 13 Sep 12:56 — `telemetry.sh` restarted (it died with the 10:04 power-off; `GUARD_PCH=108`, between the watchdog's HOT cap at
+  100 and its 115 crit, so it never pre-empts the watchdog during an E2E task). First 88/78 verification (qwen122b shard 3,
+  27 GiB): 9–15 s bursts / 30 s cool-downs, PCH peaks 88–89 °C → the watchdog band (≥ 90) is not touched.
+
 ## 7. At the real end (when the research phase is over)
 
 - Boot start: remove `nostart` from the `KEYWORD` line of `asgard/rc.d/llama`, reinstall the stub

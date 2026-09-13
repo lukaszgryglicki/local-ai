@@ -85,7 +85,9 @@ if [ -f Makefile ]; then
   make clean >/dev/null 2>&1; make >make.out 2>&1 && [ -x b64 ] && { echo "make: ok"; makeok=1; } || { echo "make: FAIL"; tail -8 make.out; makeok=0; }
   mt=$(make test 2>&1 | tail -3 | tr '\n' ' '); echo "make test: $(echo "$mt" | cut -c1-200)"
 else makeok=0; fi
-if [ "$buildok" = 1 ] && [ "$nolibc" = 1 ] && [ "$cmpok" = 1 ] && [ "$makeok" = 1 ]; then echo "VERDICT: PASS"
-else echo "VERDICT: FAIL (as+ld=$buildok nolibc=$nolibc checks=$cmpok make=$makeok)"; fi
+# graded score (13 Sep): functional = as+ld, checks, make; spec = nolibc
+fn=$(( ${buildok:-0} + ${cmpok:-0} + ${makeok:-0} )); sp=$(( ${nolibc:-0} )); sc="score=$((fn+sp))/4 functional=$fn/3 spec=$sp/1"
+if [ "$buildok" = 1 ] && [ "$nolibc" = 1 ] && [ "$cmpok" = 1 ] && [ "$makeok" = 1 ]; then echo "VERDICT: PASS $sc"
+else echo "VERDICT: FAIL (as+ld=$buildok nolibc=$nolibc checks=$cmpok make=$makeok) $sc"; fi
 echo "-- $P/b64.s:"; cat b64.s
 for f in Makefile test.sh; do [ -f "$f" ] && { echo "-- $P/$f:"; cat "$f"; }; done

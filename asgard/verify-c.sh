@@ -64,6 +64,8 @@ EOF
 else
   echo "comparisons: no sanitizer binary"
 fi
-if [ "$strictok" = 1 ] && [ "$makeok" = 1 ] && [ "$makete" = 1 ] && [ "$selfok" = 1 ] && [ "$cmpok" = 1 ]; then echo "VERDICT: PASS"
-else echo "VERDICT: FAIL (strict=$strictok make=$makeok maketest=$makete selftest_asan=$selfok comparisons=$cmpok)"; fi
+# graded score (13 Sep): functional = make, maketest, selftest_asan, comparisons; spec = strict
+fn=$(( ${makeok:-0} + ${makete:-0} + ${selfok:-0} + ${cmpok:-0} )); sp=$(( ${strictok:-0} )); sc="score=$((fn+sp))/5 functional=$fn/4 spec=$sp/1"
+if [ "$strictok" = 1 ] && [ "$makeok" = 1 ] && [ "$makete" = 1 ] && [ "$selfok" = 1 ] && [ "$cmpok" = 1 ]; then echo "VERDICT: PASS $sc"
+else echo "VERDICT: FAIL (strict=$strictok make=$makeok maketest=$makete selftest_asan=$selfok comparisons=$cmpok) $sc"; fi
 for f in bignum.c Makefile; do [ -f "$f" ] && { echo "-- $P/$f:"; cat "$f"; }; done

@@ -121,7 +121,7 @@ short prompts — 3× above the ideal band, half of the IQ2_M all-VRAM winner (6
 runs on the Quadro. `models.sh`: `MODEL_NCMOE=20` confirmed for `qwen35b-q4`. Variants (13 Sep, chain 2): `--no-host`
 and 16 threads both rejected; the frozen T1 knobs for this file are the plain defaults (`NCMOE=20 THREADS=8 SPEC=none`).
 
-### 2.3 Depth bench and E2E — **pending (must be re-run on AC)**
+### 2.3 Depth bench (valid run 13 Sep 12:39–12:50, chain 2) and E2E
 
 `GEN=64 bench.py q4cpu20 2048 16384 65536 131072` was run 23:11–23:27, i.e. entirely **on battery** (§3): pp 266 →
 110 t/s, tg 6.66 → 4.83 t/s from 2K to 66K depth. Those numbers are *not* the config's — the Quadro was capped at
@@ -132,6 +132,40 @@ then start `e2e-all.sh qwen35b-q4`.
   download queue's `sha256` of a 49.8 GB shard pushed the PCH to 95–100 °C and the watchdog capped the CPU to 1.2 GHz
   (§3.3) — `q4cpu20-ac,2048: pp 113.5, tg 16.6 t/s` (healthy ≈ 982 / 30). Killed 10:10. Re-run only through the
   `wait-no-verify.sh` guard (no verification running, `thermal-policy.ratio` = 53).
+
+**Valid run** (`GEN=64 bench.py q4cpu20-ac 2048 16384 65536 131072`, GPU healthy — pin check 60.23 t/s at 11:44, AC on,
+no verification, `settle.py` waited 80 s after the load for the turbo band: cap ratio 24 → 53, PCH 90 → 75 °C):
+
+| requested depth | tokens actually in context | pp t/s (whole prompt) | tg t/s (64 tokens) | wall s | note |
+|---|---|---|---|---|---|
+| 2 048 | 1 953 | **831** | **32.5** | 4.3 | matches the sweep (`cpu20-ac2` 31.6) |
+| 16 384 | 15 364 | 758 | 33.0 | 22.2 | flat — the 20 offloaded layers cost nothing extra at this depth |
+| 65 536 | 50 180 | 412 | 26.6 | 124 | tg −18 % vs 2K |
+| 131 072 | 66 564 | 195 | 22.9 | 344 | **marginal pp for the last 16.4K tokens ≈ 75 t/s** (219 s); tg −30 % vs 2K |
+
+The bench's filler text tokenises to fewer tokens than requested (50K for "65536", 66.5K for "131072" — `bench.py` caps
+the prompt), so the deepest point is 66.5K, not 131K. Two observations for the T1/T2 design:
+
+- **Prefill is *not* CPU work here.** The watchdog's one-minute samples during the whole 6-minute 66.5K prefill show
+  `pkg=6.7–7.4 W, freq 4.2–4.4 GHz on one core` — the CPU was idle; llama.cpp streams the CPU-resident expert weights to
+  the Quadro for batched prompt processing (the classic partial-offload behaviour, ≥ 32 tokens per ubatch) and computes
+  there. This is why pp survived the offload in §1 and why `--no-host` (un-pinned host memory) cost 20–40 % pp in §2.2:
+  the streaming runs out of the pinned host buffers. For T2 (all experts in RAM) this also means prefill speed will be
+  set by PCIe streaming (7–8 GB of expert weights per 1024-token ubatch over PCIe 3.0 x16) plus attention — *not* by
+  the 8 CPU cores — so the "≈ 65–120 t/s prefill" CPU-bound estimate is a floor, not the expectation.
+- **pp falls off a cliff past ~50K tokens** (412 → 195 t/s average, ≈ 75 t/s marginal) while T0's all-VRAM `qwen35b`
+  did a cold 64 436-token prompt at 591 t/s (results-t0.md). Candidates: with 15 144 of 16 384 MiB VRAM taken by weights
+  + KV, the Vulkan compute/scratch buffers for flash-attention at 50K+ keys fall back to host memory
+  (`GGML_VK_ALLOW_SYSMEM_FALLBACK`) or shrink; or the streamed-weights path serialises with the attention at depth.
+  Measurable when the GPU is free: `NCMOE=22`/`24` (more VRAM headroom) at 65536/131072 depth vs `NCMOE=20`, and the
+  same points on `kat-q4`/`qwen35b-q8`. The E2E tasks record per-request pp at depth 23–130K (`per-request.txt`), which
+  will show whether this bites real agentic work (T0 saw 252–406 t/s for 1–4K batches at 25–40K depth).
+
+### 2.4 E2E rust/go/c/asm (chain 2, `e2e-all.sh qwen35b-q4`, started 13 Sep 12:52 after pin check 61.19 t/s)
+
+| task | wall | result | server-side speed | verdict | note |
+|---|---|---|---|---|---|
+| rust | 155 s (11 turns) | agent: success | pp 566 t/s (22 865-token system prompt), tg 27.7 t/s aggregate at 23–27K depth (per-request 22.3–31.8) | **FAIL-task** (`build=1 test=1 roundtrips=1 signature=0 nodeps=1`) | wrote `fn reverse(s: &str) -> String` — the spec says `pub fn`; everything else passed (4 unit tests, 18/18 round-trips incl. Polish + emoji, no deps, `chars().rev()`). Same rule failed nobody else: T0 `qwen35b` (IQ2_M) and gemma wrote `pub fn`. A spec-compliance miss, not a capability one — but a FAIL-task by the fixed rules |
 
 ## 3. Infra event — **AC power lost 23:10:41** (FAIL-infra; no model or run is charged with it)
 

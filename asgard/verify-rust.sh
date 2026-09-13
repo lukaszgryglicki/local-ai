@@ -48,9 +48,11 @@ EOF
 else
   echo "round-trips: binary $bin not found"
 fi
+# graded score (13 Sep): functional = build, test, roundtrips; spec = signature, nodeps -> "how much" it failed
+fn=$(( ${buildok:-0} + ${testok:-0} + ${rtok:-0} )); sp=$(( ${sigok:-0} + ${depsok:-0} )); sc="score=$((fn+sp))/5 functional=$fn/3 spec=$sp/2"
 if [ "$buildok" = 1 ] && [ "$testok" = 1 ] && [ "$rtok" = 1 ] && [ "$sigok" = 1 ] && [ "$depsok" = 1 ]; then
-  echo "VERDICT: PASS"
+  echo "VERDICT: PASS $sc"
 else
-  echo "VERDICT: FAIL (build=$buildok test=$testok roundtrips=$rtok signature=$sigok nodeps=$depsok)"
+  echo "VERDICT: FAIL (build=$buildok test=$testok roundtrips=$rtok signature=$sigok nodeps=$depsok) $sc"
 fi
 echo "-- $main:"; cat "$main"

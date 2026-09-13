@@ -65,6 +65,8 @@ EOF
 else
   echo "comparisons: binary not built"
 fi
-if [ "$buildok" = 1 ] && [ "$vetok" = 1 ] && [ "$testok" = 1 ] && [ "$rtok" = 1 ] && [ "$depsok" = 1 ]; then echo "VERDICT: PASS"
-else echo "VERDICT: FAIL (build=$buildok vet=$vetok test=$testok comparisons=$rtok nodeps=$depsok)"; fi
+# graded score (13 Sep): functional = build, test, comparisons; spec = vet, nodeps
+fn=$(( ${buildok:-0} + ${testok:-0} + ${rtok:-0} )); sp=$(( ${vetok:-0} + ${depsok:-0} )); sc="score=$((fn+sp))/5 functional=$fn/3 spec=$sp/2"
+if [ "$buildok" = 1 ] && [ "$vetok" = 1 ] && [ "$testok" = 1 ] && [ "$rtok" = 1 ] && [ "$depsok" = 1 ]; then echo "VERDICT: PASS $sc"
+else echo "VERDICT: FAIL (build=$buildok vet=$vetok test=$testok comparisons=$rtok nodeps=$depsok) $sc"; fi
 for f in $gofiles; do echo "-- $P/$f:"; cat "$f"; done
