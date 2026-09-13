@@ -284,7 +284,10 @@ Dell Precision 7750 (Xeon W-10885M 8C/16T, **Quadro RTX 5000 16 GiB** on
 nvidia 595 + Intel P630 iGPU for X, 128 GiB DDR4-2933, 4-way NVMe mirror,
 GELI). Same repo checked out at `/data/local-ai`; same POC tree at
 `/data/ai/local-agent-poc`; `zroot/data/local-ai` dataset with the same
-`compression=off primarycache=metadata` recipe (`/data/ai` is a plain dir).
+`compression=off primarycache=metadata` recipe (`/data/ai` is a plain dir) and
+`vfs.zfs.arc.max=17179869184` (16 GiB) in `/etc/sysctl.conf` — with 128 GiB and
+no cap the ARC reached 88 GiB and the NVIDIA driver's pinned host allocations
+(what `--n-cpu-moe` experts live in) failed outright (asgard/results-t0.md §3.2).
 Status: llama.cpp v0.4.0 built natively with Vulkan, Quadro visible as
 `Vulkan0` with NV_coopmat2, `test-backend-ops` gate: 0 FAIL over every op
 (the full run only aborts at one synthetic 768 MiB upload — the driver cap
@@ -297,12 +300,15 @@ North-Mini-Code / Qwen3.5-9B / Gemma-4-26B-A4B, T0 Qwen3.6-35B-A3B, T0b
 KAT-Coder, T1, T2 Qwen3.8-Flash-Next), is in `asgard/plan.md`; the
 end-of-groundwork report is `asgard/status-2026-09-11.md`.
 
-Serving on asgard: `asgard/serve.sh north` (or `qwen9b` / `gemma` /
-`qwen35b`; `NP=` slots, `THREADS=`, `NCMOE=` overrides) — same
+Serving on asgard: `asgard/serve.sh` (default `qwen35b` = the frozen T-1
+`fastest-vram` winner, Qwen3.6-35B-A3B UD-IQ2_M; T0 candidates `qwen35b-q4` /
+`kat-q4` / `qwen35b-q8`; `NP=` slots, `THREADS=`, `NCMOE=` overrides) — same
 `10.253.254.1:18080` + alias `qwen3coder-local` as tuxi, so the top-level
-`qwen.sh`/`health.sh`/`copilot.sh` also work there; `MODEL=north
-asgard/qwen.sh` adds the model's own sampling. All weights + 256K q8_0 KV in
-Quadro VRAM (`--gpu-layers 99 --device Vulkan0`, X on the iGPU).
+`qwen.sh`/`health.sh`/`copilot.sh` also work there; `MODEL=qwen35b
+asgard/qwen.sh` adds the model's own sampling. T-1: all weights + 256K q8_0 KV
+in Quadro VRAM (`--gpu-layers 99 --device Vulkan0`, X on the iGPU); T0 adds
+`--n-cpu-moe N` (expert layers in CPU RAM). The other T-1 candidates (North,
+Qwen3.5-9B, Gemma-4) were removed on 13 Sep 2026 — see `asgard/report-t1.md` §8.
 
 Running it (2026-09-12, settled in **`asgard/ops.md`**): `asgard/start.sh MODEL`
 (daemonizes serve.sh, waits for `/health`, remembers the start in

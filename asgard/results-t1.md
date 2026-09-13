@@ -54,6 +54,9 @@ observable — the EC still throttles the GPU from 68 °C (`SW Thermal Slowdown`
 1. `zfs set primarycache=all zroot/data/local-ai` (was `metadata`): model files stay in ARC
    (128 GiB RAM), so server restarts read from RAM (10 s for 11 GB, zero NVMe traffic) instead
    of re-reading the drives every time. Prefetch once per model: `cat model.gguf > /dev/null`.
+   **Reverted to `metadata` on 13 Sep 01:05** (+ `vfs.zfs.arc.max` = 16 GiB in `/etc/sysctl.conf`): the ARC grew to 88 GiB
+   and starved the NVIDIA pinned host buffers that the T0 `--n-cpu-moe` runs need — results-t0.md §3.2, which also
+   suggests the `qwen9b` 256 MiB pinned-allocation failures of §3/§4 were this ARC effect (FAIL-infra), not the model.
 2. `asgard/telemetry.sh` runs under daemon(8) during every test: 5 s CSV of PCH / max core /
    CPU MHz / watchdog cap / GPU temp-clock-power-util-throttle-reason, and a **guard** that runs
    `stop.sh` at PCH ≥ 102 °C (event in `~/local-ai-runs/guard.log`). It observes only.
@@ -553,6 +556,11 @@ Speed on the E2E: 30–46 t/s aggregate, worst request 18 t/s at 230K context; p
 up to 234.6K with `--cache-ram 8192`, zero restarts, zero FAIL-infra.
 
 ## 5. T-1 verdict — the `fastest-vram` profile (2026-09-12 21:46)
+
+> **Frozen 2026-09-13 00:30 (owner's decision):** `qwen35b` is the only T-1 model kept. The GGUFs of the three losers
+> (`North-Mini-Code-1.0-UD-IQ3_XXS`, `Qwen3.5-9B-Q8_0`, `gemma-4-26B-A4B-it-UD-IQ3_S`, 32.8 GB) were deleted and their
+> `models.sh` entries removed (settings recoverable from git history / report-t1.md §8); run artifacts stay
+> (`~/local-ai-runs/sweep-*.csv`, `e2e-*.log`, `/data/ai/*-task-{north,qwen9b,gemma}/`).
 
 Four candidates, the same four E2E tasks, NP=1 at the full native 262 144 context, everything in the Quadro. Every
 verdict below is a model verdict (`FAIL-task`); the only infra events of the whole T-1 phase were the 02:09 freeze

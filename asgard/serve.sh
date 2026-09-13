@@ -4,7 +4,7 @@
 # 16 GiB are free): weights + 256K q8_0 KV + compute buffers. No --cpu-moe / --no-kv-offload here.
 # Same host/port as tuxi's ../serve.sh (10.253.254.1:18080) and the extra alias qwen3coder-local,
 # so ../qwen.sh, ../health.sh, ../copilot.sh work unchanged on asgard; asgard/qwen.sh adds
-# per-model sampling. MODEL = north | qwen9b | gemma | qwen35b (asgard/models.sh).
+# per-model sampling. MODEL = qwen35b (T-1 winner = `fastest-vram`, default) | qwen35b-q4 | kat-q4 | qwen35b-q8 (T0 candidates); asgard/models.sh.
 # Env overrides: NP slots (default 1; ctx = NP x 256K unless CTX given), CTX, THREADS (8),
 # THREADS_BATCH (16), NCMOE (--n-cpu-moe, default per model), SPEC (--spec-type, default per
 # model; SPEC=none for raw decode speed), DRAFT_KV (KV type of the MTP draft context, default q8_0; with f16 the

@@ -4,7 +4,7 @@
 # each starts from a similar GPU temperature, then print a one-line-per-task summary table (wall, turns, tokens
 # in/out, pp/tg t/s, max context depth, verdict). Full details: /data/ai/TASK-task-MODEL/summary.txt.
 # Detached use: daemon -f -o ~/local-ai-runs/e2e-MODEL.log /data/local-ai/asgard/e2e-all.sh MODEL
-d=$(dirname "$(realpath "$0")"); M=${1:-north}; shift; TASKS=${*:-rust go c asm}; GAP=${GAP:-60}
+d=$(dirname "$(realpath "$0")"); M=${1:-qwen35b}; shift; TASKS=${*:-rust go c asm}; GAP=${GAP:-60}
 first=1
 for T in $TASKS; do
   [ $first = 1 ] || sleep "$GAP"; first=0

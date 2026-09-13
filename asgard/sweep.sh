@@ -5,8 +5,8 @@
 # codebench.py LABEL 2 (thinking on, greedy, MAXTOK tokens per answer), append CSV. Output in
 # ~/local-ai-runs/sweep-MODEL.{csv,log}. Run detached: daemon -f -o ~/local-ai-runs/sweep-MODEL.log sweep.sh ...
 # A third ;-field sets environment variables for start.sh (NCMOE, IGPU_MOE, NP, CTX, THREADS, ...).
-# Example: sweep.sh qwen9b "mtp+ngram=draft-mtp,ngram-mod" "mtp=draft-mtp" "ngram=ngram-mod" "none=none"
-#          sweep.sh north "n12=ngram-mod;--spec-draft-n-max 12"
+# Example: sweep.sh qwen35b "ngram=ngram-mod" "none=none"
+#          sweep.sh qwen35b-q4 "cpu20=none;;NCMOE=20" "n12=ngram-mod;--spec-draft-n-max 12"
 #          sweep.sh qwen35b "vram=ngram-mod" "cpu5=ngram-mod;;NCMOE=5" "igpu5=ngram-mod;;IGPU_MOE=5"
 d=$(dirname "$(realpath "$0")"); cd "$d" || exit 1
 M=$1; shift; [ -n "$M" ] && [ $# -gt 0 ] || { echo "usage: sweep.sh MODEL LABEL=SPEC[;EXTRA] ..." >&2; exit 1; }

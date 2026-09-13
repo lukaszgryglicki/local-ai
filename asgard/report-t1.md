@@ -37,7 +37,8 @@ Dell Precision 7750: Xeon W-10885M (8C/16T, Comet Lake, AVX2), **Quadro RTX 5000
 `NV_coopmat2`), Intel UHD P630 iGPU (Mesa ANV; X runs on it; Vulkan heap 95.7 GiB UMA), 128 GiB DDR4, 4 × KC3000 NVMe, FreeBSD
 15.1-STABLE, GELI. llama.cpp = the POC fork v0.4.0 `5266f24`, native Vulkan build; from 12 Sep 14:40 the patched
 `build-vulkan-2` (see §7.3). Model files on the `zroot/data/local-ai` dataset (`primarycache=all` since 11 Sep 21:2x, so a
-restart reloads 11 GB from ARC in ~10 s).
+restart reloads 11 GB from ARC in ~10 s; **reverted to `metadata` + a 16 GiB ARC cap on 13 Sep 01:05** — an unlimited ARC
+starved the NVIDIA pinned host buffers that T0 needs, results-t0.md §3.2).
 
 Thermal regime during all tests (unchanged since the owner's 11 Sep 21:26 decision): `thermal_policy` "turbo band" — the
 CPU cap follows the hottest core between 5.3 GHz (≤ 70 °C) and 2.4 GHz (≥ 85 °C), no turbo while PCH ≥ 85 °C or NVMe
@@ -234,6 +235,7 @@ harmless.
 | `models.sh` `qwen35b` | `Qwen3.6-35B-A3B-UD-IQ2_M.gguf` @ `a483e9e` (sha256 verified), `MODEL_SPEC=none`, `MODEL_CACHE_RAM=8192`, `MODEL_NCMOE=0`, `enable_thinking: true`, temp 1.0 / top-p 0.95 / top-k 20 / min-p 0 |
 | `serve.sh` | `B=` = `build-vulkan-2/bin/llama-server`; `--ctx-size 262144 --parallel 1 --gpu-layers 99 --device Vulkan0 --fit off --flash-attn on --cache-type-k/v q8_0 --cache-ram 8192 -b 2048 -ub 1024 --ctx-checkpoints 8 --spec-type none --jinja --reasoning on --reasoning-budget -1`, binds `10.253.254.1:18080` |
 | defaults | `start.sh` / `serve.sh` / `qwen.sh` / `llamactl.sh DEFAULT_MODEL` = `qwen35b` → `sudo service llama start` (or `./start.sh`) brings up the T-1 profile; verified 21:46: UP in 5 s, 14 099 MiB, `--spec-type none`, then `./stop.sh` |
+| freeze (13 Sep 00:30) | only `qwen35b` kept — North / Qwen3.5-9B / Gemma-4 GGUFs deleted (32.8 GB freed), their `models.sh` entries removed (git history), defaults in `serve.sh`/`qwen.sh`/`llamactl.sh`/`e2e-*.sh`/`download.sh` all point at `qwen35b`; run artifacts kept (`sweep-*.csv`, `e2e-*.log`, `/data/ai/*-task-{north,qwen9b,gemma}/`) |
 | use | `sudo service llama start [MODEL]` / `stop` / `status`; `asgard/qwen.sh [--yolo] …` (qwen-code preconfigured with the model's sampling); `asgard/health.sh`; per-model overrides via environment: `NP CTX THREADS NCMOE IGPU_MOE SPEC EXTRA` |
 
 ## 9. Open items and what T0 starts from

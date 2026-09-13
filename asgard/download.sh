@@ -4,7 +4,7 @@
 # One model at a time (the box has ~10-13 MB/s on 5 GHz Wi-Fi -> ~15 min per 11 GiB file).
 # Background use: daemon -f -o ~/local-ai-runs/dl-MODEL.log /data/local-ai/asgard/download.sh MODEL  (/var/tmp is a tmpfs wiped at boot)
 d=$(dirname "$(realpath "$0")")
-. "$d/models.sh"; model_env "${1:-north}" || exit 1
+. "$d/models.sh"; model_env "${1:-qwen35b}" || exit 1
 mkdir -p "$d/../models"; cd "$d/../models" || exit 1
 URL="https://huggingface.co/$MODEL_REPO/resolve/$MODEL_REV/$MODEL_FILE"
 verify() {

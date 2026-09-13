@@ -18,7 +18,7 @@
 # (S3 suspend with a request in flight) is killed and restarted with start.sh --last, which turns the silent hang into
 # the API error above and therefore into a resume.
 d=$(dirname "$(realpath "$0")")
-M=${1:-north}; T=${2:-rust}
+M=${1:-qwen35b}; T=${2:-rust}
 . "$d/e2e-tasks.sh"
 PROMPT=$(e2e_prompt "$T") || exit 1
 W=/data/ai/$T-task-$M

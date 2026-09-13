@@ -13,7 +13,7 @@
 # Do not run pre/task while an E2E task is in flight: with --parallel 1 any request evicts that task's KV cache.
 # Typical: ./zzz-probe.sh pre && ./zzz-probe.sh task && ./zzz-probe.sh zzz   ... owner resumes ...   ./zzz-probe.sh post
 d=$(dirname "$(realpath "$0")"); u=http://10.253.254.1:18080; k=$(cat "$d/../key.secret")
-M=${MODEL:-qwen9b}; R=${LOCAL_AI_RUNS:-$HOME/local-ai-runs}/zzz; TAG=${2:-$(date +%Y%m%d)}; mkdir -p "$R"
+M=${MODEL:-qwen35b}; R=${LOCAL_AI_RUNS:-$HOME/local-ai-runs}/zzz; TAG=${2:-$(date +%Y%m%d)}; mkdir -p "$R"
 Q='In four short sentences, explain what ACPI S3 suspend-to-RAM does to the CPU, the RAM, a discrete GPU and the disks of a laptop.'
 
 slot() { curl -s -m 5 -H "Authorization: Bearer $k" "$u/slots" | python3 -c '

@@ -160,3 +160,129 @@ runs, the all-VRAM control runs (23:39–23:41). **Kept:** everything up to 23:1
 (3) resume the queue (`daemon -f -o ~/local-ai-runs/dl-t0.log sh ~/local-ai-runs/dl-t0-queue.sh` — it skips verified
 files); (4) redo §2.3 (depth bench, EPP=100 vs 0 once), then start the `qwen35b-q4` E2E. Follow-ups for the box:
 the thermal-watchdog now logs `ac=0/1` per line and raises an `EVENT AC POWER LOST / restored` on transitions — patched file deployed 23:48 (`.new` + `mv`), effective at the next `service thermal_watchdog restart` (owner's call; the running copy is the old one).
+
+### 3.1 AC back 00:01:31 — but the Quadro stays at base clock (open at 00:35, 13 Sep)
+
+`Sep 13 00:01:31 acpi_acad0: On Line`; battery 41 % → charging at ~38–40 W (`hw.acpi.battery.state=2`); the guard
+exited by itself, backlight back to 60, download queue resumed 00:07 (Q8 `.part` continues).
+
+**Symptom.** The all-VRAM T-1 control (`./start.sh qwen35b; GEN=256 bench.py … 64`) gives **15.3–16.4 t/s instead of
+57–61**; `nvidia-smi` under load: **P2/P3, SM 1035 MHz** (= the Quadro RTX 5000 Mobile *base* clock, i.e. GPU Boost
+off), mem 5000–6801 MHz, 45–56 W of the 110 W limit, 93 % util, clock-event reason **0x1 "Idle" only** — no SW power
+cap, no HW slowdown, no thermal, no power brake, counters all 0; PCIe Gen3 x16; no NVRM errors in `dmesg`/messages.
+Idle it sits at P0 1035 MHz / 7000 MHz (never P8). The CPU is *not* capped (4.4 GHz seen at 00:19). `sudo nvidia-smi
+-lgc 1500,2100` is accepted and ignored (still 1035) — reset with `-rgc`; `-lmc` unsupported.
+
+**Root-cause work (tool: `asgard/nvpowersrc.c` → `~/local-ai-runs/nvpowersrc`, a user-space RM ioctl client built from the
+open-gpu-kernel-modules headers; all controls used are `RMCTRL_FLAGS_NON_PRIVILEGED`):**
+
+| probe | result |
+|---|---|
+| `NV2080_CTRL_CMD_PERF_GET_POWERSTATE` | RM believes **`battery`** while `hw.acpi.acline=1` |
+| `SET_POWERSTATE ac` | accepted; a *new* first-client attach (GPU wake) re-reads it → `battery` again; with a server already attached it stays `ac` |
+| bench with RM = `ac` | mem clock 6801 instead of 5000 in some runs, **SM still 1035**, 16.3 t/s |
+| `SET_AUX_POWER_STATE P0` (D-notifier path) | accepted (status 0), no change |
+| `RATED_TDP_GET_CONTROL` ×5 clients | all `DEFAULT`; `GET_STATUS` not exported (0x56) |
+| `RATED_TDP_SET_CONTROL OS/GLOBAL = FORCE_EXCEED` | accepted, no change (reverted to DEFAULT) |
+
+Reading: the FreeBSD nvidia driver has no `_PSR` notifier (the Linux one, `nv-acpi.c`, calls
+`rm_power_source_change_event` on the AC-adapter ACPI notify); it re-reads the power source only when the GPU wakes for a
+first client and that read says "battery" — most likely the platform's own AC/DC signal (battery `_BST` state 2 =
+charging, or the EC's DC-mode GPIO to the GPU) rather than `_PSR`. Since *every* RM-side lever is accepted but the SM
+clock never moves, the base-clock pin is enforced **below the RM** — PMU/VBIOS "battery boost" limit driven by a
+hardware signal from the Dell EC, or the EC's power budget while fast-charging. Nothing further can be done from
+software without `nvidia-smi -r` / a driver reload / a reboot (all forbidden).
+
+**Watching:** `~/local-ai-runs/gpu-cap-watch.sh` (user `daemon`, pidfile `~/local-ai-runs/gpu-cap-watch.pid`, log
+`gpu-cap-watch.log`) polls every 10 min — AC/battery state, RM belief, a 20 s all-VRAM bench + clocks — and exits the
+moment tg ≥ 50 t/s. Hypothesis under test: the pin lifts when the battery reaches full (state 2 → 0). Polls so far:
+00:24 (60 %) 16.3 t/s, 00:28 (64 %) 15.3 t/s. **Every speed number since 23:10 is invalid; fits are not.**
+
+**If it is still pinned in the morning (owner):** unplug/replug the AC once (lets the EC/driver re-evaluate); if that
+does not do it, a reboot is the remaining option (owner's call). Pending anyway: `service thermal_watchdog restart`.
+
+#### 3.1.1 Closed 01:20 — the pin is the Dell EC's AC/DC line to the GPU; the FreeBSD driver has no ACPI power path at all
+
+- **01:07 battery full** (`hw.acpi.battery.life=100 state=0`) — still 16.3 t/s, P2/1035 MHz, RM still `battery` → the
+  "lifts at full charge" hypothesis is **refuted** (polls 00:39 73 % 17.1, 00:49 82 % 16.3, 01:07 100 % 16.3 t/s).
+- **Driver source** (`NVIDIA-FreeBSD-x86_64-595.99.02.tar.xz`, `src/nvidia/nvidia_acpi.c`, the open kernel glue of the
+  package on asgard): `nv_acpi_get_powersource()` → `NV_ERR_NOT_SUPPORTED`; `nv_acpi_method()` (every `_DSM`, i.e. the
+  NBCI/NVHG D-notifier handshake) → `NV_ERR_NOT_SUPPORTED`; `nv_acpi_methods_init()` → 0 handles; no ACPI notify
+  handler; `rm_power_source_change_event` / `rm_acpi_notify` are declared in `nv.h` and **never called anywhere** in the
+  FreeBSD glue. In `RmInitAdapter` (open-gpu-kernel-modules 595.99.02 `osinit.c:2383`) the RM only learns the OS power
+  source *if* that call succeeds — so on FreeBSD the RM's power source is exclusively the GPU's own hardware AC/DC sense
+  (the EC-driven GPIO the VBIOS declares), which is exactly what `nvpowersrc` reports and what the PMU's DC clock limit
+  follows. `SET_POWERSTATE` only writes the software mirror; the hardware line wins.
+- **Platform side** (`sudo acpidump -s` → `~/local-ai-runs/acpi/asgard-acpi-595.dsl`): `\_SB.AC._PSR` = `ECG2()` (the EC's
+  AC bit — this is `hw.acpi.acline=1`, correct). The GPU's other channel, the D-notifier (EC event 0x8000 → EC reg 0x2E
+  = 0xD1…0xD5 → `EV10` → `PEGP.EVD2` → `Notify(PEGP, level)`, acknowledged through `_DSM` `HGPS`/`PLMT`), is dead on
+  FreeBSD: `EVD2` only fires once the driver has registered via `_DSM` (`VOTF`), which never happens. So the EC drives two
+  independent outputs — the ACPI AC bit (fine) and the GPU's AC/DC line — and the latter has said **DC since 23:10:41**.
+- **Consequence:** there is no software fix on this driver/OS combination (confirms "below the RM"). Owner: unplug/replug
+  the AC (the EC re-identifies the adapter and re-drives the GPU line); if that does not release it, reboot. Under the pin
+  the T0 candidates run at **qwen35b-q4 11.5 t/s (30.7 healthy)** and **qwen35b-q8 7.3–8.0 t/s** (healthy unknown), the
+  all-VRAM control at 16.3 (61) — the GPU part is ~4× slower, so **no E2E is started under the pin** (the 4-h cap would
+  turn into FAIL-infra noise); fits and the memory work below are unaffected. Watch loop restarted 01:19.
+
+### 3.2 Second FAIL-infra of the night, fixed: ZFS ARC starved the NVIDIA pinned host buffers (00:53–01:05)
+
+`ALL=1 fit.sh qwen35b-q8 27 29 31 33` died at every k within 17–30 s: 24× `ggml_vulkan: Failed to allocate pinned memory
+(vk::Device::allocateMemory: ErrorOutOfDeviceMemory)` (the `Vulkan_Host` buffer that llama.cpp uses for the `--n-cpu-moe`
+experts — ~0.8 GiB/layer × 27–33 layers), then, 13 s later, `failed to allocate Vulkan0 buffer of size 998244352` for the
+KV cache = the known first-failure poisoning of every later NVIDIA allocation in the process (§0/T-1 notes).
+
+**Cause.** `top`: `92G Wired, 30G Free, ARC 88G` (`kstat.zfs.misc.arcstats.size` 94.2 GB, `c_max` unlimited = 126.6 GiB),
+`v_user_wire_count` = 4 pages. The 11 Sep switch to `primarycache=all` on `zroot/data/local-ai` (results-t1.md §consequences
+1) plus 37 GB of downloads and every mmap'd model load had grown the ARC to fill RAM. The NVIDIA driver's pinned host
+allocations need wired system memory *now*; they do not wait for ARC reclaim — they fail (and poison the client). Q4 k=20
+and KAT k=19 (9–11 GiB pinned) squeezed into the 30 GiB; Q8 (21–26 GiB) did not. The T-1 `qwen9b` "256 MiB pinned
+allocation fails near 256K" incidents are very probably the same mechanism (ARC full after the model downloads) — noted
+as a likely FAIL-infra reclassification; T-1 stays frozen, the winner was decided on quality.
+
+**Fix (all runtime, reversible, done as `sudo`):**
+1. `sysctl vfs.zfs.arc.max=17179869184` (16 GiB) + the same line in `/etc/sysctl.conf` (commented). ARC target dropped to
+   13 GiB within seconds, but the evicted buffers stayed parked in UMA zones (still 92 GiB wired) …
+2. … so `sysctl debug.uma_reclaim=2` (drain) → **wired 92 → 15 GiB, free 30 → 106 GiB** in 5 s (`=3` adds per-CPU caches;
+   asgard has **no swap**, so memory-pressure tricks were not an option).
+3. `zfs set primarycache=metadata zroot/data/local-ai` — back to the readme recipe (the 11 Sep `all` was for 10 s T-1
+   restarts of 11 GiB files; T0/T1 need that RAM for weights, and a ≤ 16 GiB ARC cannot hold a 34 GiB model anyway). Model
+   restarts now come from the page cache (pages survive `munmap`) or NVMe (4-way mirror, ~12 s for 35 GiB).
+
+Re-run of the same ladder: 0 pinned-memory warnings, every k loads (§5). Rule for T1: keep the ARC cap (lower it to 8 GiB
+if a T1 model needs the room) and check `top` "Wired" before any fit — pinned failures are an infra symptom, never a model
+one.
+
+## 4. `kat-q4` — KAT-Coder-V2.5-Dev Q4_K_L (Qwen3.6-35B-A3B fine-tune, `VERIFIED_OK` 23:18)
+
+### 4.1 Fit ladder (`ALL=1 fit.sh kat-q4 18 20 22`, then k=19 by hand, 00:26–00:31; memory only → valid despite the clock pin)
+
+| `--n-cpu-moe` | VRAM at UP | note |
+|---|---|---|
+| 18 | 15 654 MiB | too tight (Q4_K_XL k=18 came UP at 16 070 and 500'd on the first decode) |
+| **19** | **15 223 → 15 267 MiB after the first request** | **chosen** — ~1.1 GiB headroom, same margin as the Q4_K_XL k=20 that survived a full sweep |
+| 20 | 14 725 MiB | safe fallback |
+| 22 | 13 863 MiB | — |
+
+Q4_K_L is ~0.42 GiB/layer lighter than UD-Q4_K_XL (14 725 vs 15 144 at k=20), hence one layer more in VRAM.
+`models.sh kat-q4 MODEL_NCMOE=19`. Speed sweep and E2E: after the GPU boosts again.
+
+**Functional check 01:22 (pinned GPU, one chat request, `enable_thinking: true`):** llama-server picks the Qwen3 template
+("chat template supports preserving reasoning"), thinking lands in `reasoning_content` (118 chars), the answer in `content`
+(a correct SWAR `popcount64` + complexity note), `finish_reason=stop`, 406 tokens in 29.7 s ≈ 13.7 t/s under the pin (k=19).
+Same kwargs/sampling as `qwen35b`, so `sweep.sh kat-q4 "none=none"` and `e2e-all.sh kat-q4` need no template work.
+
+## 5. `qwen35b-q8` — Qwen3.6-35B-A3B Q8_0 (36 903 140 320 B, `VERIFIED_OK` 00:52 after a curl short-read at 32.4 GB and a resume)
+
+### 5.1 Fit ladder (`ALL=1 fit.sh qwen35b-q8 27 29 31 33`, 01:00–01:04, after the §3.2 fix; memory only → valid despite the clock pin)
+
+| `--n-cpu-moe` | VRAM at UP | note |
+|---|---|---|
+| 27 | — | `ggml_gallocr_reserve_n_impl: failed to allocate Vulkan0 buffer of size 1212153872` (compute buffer) |
+| **29** | **15 011 → 15 052 (after 64 tok) → 15 064 MiB (after a 4 096-token request)** | **chosen** — 1.3 GiB headroom; tg **7.31 / 8.03 t/s at depth 64 / 4 096 under the pin**, pp 223 at 4 096 |
+| 31 | 13 382 MiB | safe fallback |
+| 33 | 11 752 MiB | — |
+
+≈ 815 MiB per Q8 expert layer (vs ≈ 460 for UD-Q4_K_XL, ≈ 420 for KAT Q4_K_L); k=28 would land at ~15.8 GiB = the
+"UP-but-OOM at first decode" zone. `models.sh qwen35b-q8 MODEL_NCMOE=29` (was the plan estimate — confirmed). Speed
+sweep and E2E: after the GPU boosts again. Even pinned, 7.3–8.0 t/s already sits inside the T0 goal band (≥ 6, ideal 7–10).
+
