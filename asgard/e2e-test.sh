@@ -69,8 +69,11 @@ while [ "$resumes" -lt "${E2E_RESUMES:-3}" ] && api_error; do   # self-heal: wai
   rc=$?
 done
 t1=$(date +%s); [ -n "${UW:-}" ] && kill "$UW" 2>/dev/null
+# AC adapter drops inside the task window (13 Sep: battery = CPU 1 GHz, GPU P5 -> the wall/t/s numbers are FAIL-infra, not the model's)
+acd=$(awk -v a="$t0" -v b="$t1" 'BEGIN{c=0} /acpi_acad0: Off Line/{cmd="date -j -f \"%b %d %H:%M:%S\" \""$1" "$2" "$3"\" +%s"; cmd | getline t; close(cmd); if (t>=a && t<=b) c++} END{print c}' /var/log/messages 2>/dev/null)
+acnow=$(sysctl -n hw.acpi.acline 2>/dev/null)
 {
-echo "== e2e-test $M $T ${RESUME:+(resumed $RESUME) } $(date)  qwen rc=$rc  wall=$((t1 - t0)) s  cap=${E2E_CAP:-14400}${E2E_NOTE:+ ($E2E_NOTE)}  stdin=$( [ "$STDIN" = /dev/null ] && echo none || wc -c < "$STDIN" | tr -d ' ' ) bytes  resumes=$resumes downtime=$downtime s"
+echo "== e2e-test $M $T ${RESUME:+(resumed $RESUME) } $(date)  qwen rc=$rc  wall=$((t1 - t0)) s  cap=${E2E_CAP:-14400}${E2E_NOTE:+ ($E2E_NOTE)}  stdin=$( [ "$STDIN" = /dev/null ] && echo none || wc -c < "$STDIN" | tr -d ' ' ) bytes  resumes=$resumes downtime=$downtime s  ac_drops=${acd:-?} acline_end=${acnow:-?}$( [ "${acd:-0}" -gt 0 ] || [ "$acnow" != 1 ] && echo '  ** ON BATTERY DURING THE TASK -> FAIL-infra **' )"
 [ -f resume.log ] && sed 's/^/  /' resume.log; [ -s unstick.log ] && grep STUCK unstick.log | sed 's/^/  unstick: /'
 cat health.txt
 echo "== server-side timings for this run (log slice):"

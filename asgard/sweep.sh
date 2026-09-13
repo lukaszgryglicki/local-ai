@@ -7,7 +7,8 @@
 # A third ;-field sets environment variables for start.sh (NCMOE, IGPU_MOE, NP, CTX, THREADS, ...).
 # BENCH=bench (T2 placement/threads sweeps on slow models): run bench.py LABEL $DEPTHS (default "64 4096", GEN=256)
 # instead of codebench.py - ~5 min per config instead of 20-30 at 3 t/s; keep codebench for the 2-3 finalists.
-# Each config first waits (wait-no-verify.sh, up to 90 min) while a download verification runs - its NVMe stream heats the
+# Each config first waits for mains power (wait-ac.sh: battery = CPU 1 GHz / GPU P5, 13 Sep 10:58) and then
+# (wait-no-verify.sh, up to 90 min) while a download verification runs - its NVMe stream heats the
 # PCH past 85 C and the watchdog drops the CPU turbo band / caps the CPU, which would falsify the numbers (2026-09-13).
 # Example: sweep.sh qwen35b "ngram=ngram-mod" "none=none"
 #          sweep.sh qwen35b-q4 "cpu20=none;;NCMOE=20" "n12=ngram-mod;--spec-draft-n-max 12"
@@ -21,10 +22,10 @@ echo "# sweep $M $(date '+%F %T') GAP=$GAP MAXTOK=$MAXTOK NP=${NP:-1} CTX=${CTX:
 for cfg in "$@"; do
   label=${cfg%%=*}; rest=${cfg#*=}; spec=${rest%%;*}; extra=; envs=
   case $rest in *\;*) rest=${rest#*;}; extra=${rest%%;*}; case $rest in *\;*) envs=${rest#*;};; esac;; esac
-  ./stop.sh >/dev/null 2>&1; "$d/wait-no-verify.sh" 5400; sleep "$GAP"   # never measure during a model verification (PCH -> CPU cap)
+  ./stop.sh >/dev/null 2>&1; "$d/wait-ac.sh"; "$d/wait-no-verify.sh" 5400; sleep "$GAP"   # never measure on battery or during a model verification (PCH -> CPU cap)
   up=$(env $envs SPEC=$spec EXTRA="$extra" ./start.sh "$M" 2>&1 | head -1 | cut -c1-160)
   case $up in UP*) ;; *) echo "$(date +%T) $label START_FAILED: $up"; echo "$label,START_FAILED" >> "$OUT"; continue;; esac
-  echo "$(date +%T) $label START $(st) | $up"
+  echo "$(date +%T) $label START $(st) ac=$(sysctl -n hw.acpi.acline) | $up"
   if [ "${BENCH:-code}" = bench ]; then
     GEN=${GEN:-256} python3 bench.py "$label" ${DEPTHS:-64 4096} | tee -a "$OUT"
     echo "    $(grep -E "model buffer size|KV self size" "$LOG" 2>/dev/null | cut -c1-120 | tr '\n' '|')"
@@ -33,7 +34,7 @@ for cfg in "$@"; do
   else
     MAXTOK=$MAXTOK TEMP=0 python3 codebench.py "$label" 2 | tee -a "$OUT"
   fi
-  echo "$(date +%T) $label END   $(st)"
+  echo "$(date +%T) $label END   $(st) ac=$(sysctl -n hw.acpi.acline)"
   grep -q . "$R/guard.log" 2>/dev/null && echo "$label GUARD_LOG_NONEMPTY: $(tail -1 "$R/guard.log")"
 done
 ./stop.sh >/dev/null 2>&1

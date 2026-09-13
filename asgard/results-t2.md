@@ -32,6 +32,11 @@ fallback, not queued. Disk: `zroot/data/local-ai` 1.6 TB free before the queue (
 
 - 06:55:11 `flashnext` shard 1 `VERIFIED_OK` (10 946 624 B); shard 2 running at ~10 MB/s (ETA ≈ 09:30 for the model, ≈ 13:30
   for the whole queue). `git fetch` of llama.cpp master (07:06–07:13, 240 MB) shared the link for a few minutes.
+- 08:36 shard 2 `VERIFIED_OK` (sha256 of 49.8 GB: 9 min, PCH 93 °C, cap 2400 — the first sign of results-t1.md §3.3). Shard 3
+  downloading 08:36–10:24 across the 09:49 reboot and the 10:04 power-off (`curl --continue-at -` resumed both times; each
+  queue restart re-hashed the finished shards — fixed 10:24: markers in `models/.verified/`, `verify-slow.py` duty-cycled
+  hashing, `lockf` on the queue; details in results-t1.md §3.3). Shard 3 verified 10:29–10:4x by the closed-loop hasher
+  (PCH 73–85 °C, ~50 MB/s effective). `qwen122b` (78.6 GB) is the first file hashed with the owner's 40 s / 15 s defaults.
 
 ## 1. Build for Flash-Next — llama.cpp master b10936 + chunked-staging patch (`build-vulkan-master`, 07:13–07:17)
 
@@ -114,4 +119,14 @@ resident input-layer tensor takes the pinned host buffer type first (`make_cpu_b
 before plain CPU; `--override-tensor …=CPU` re-selects from the same list, so it does not help) and a 27 GiB pinned
 allocation is exactly the failed-`vkAllocateMemory` case we must never trigger.
 
-## 2. Fits, sweeps, E2E — pending the downloads (and, for anything speed-related, the GPU pin)
+## 2. Fits, sweeps, E2E
+
+### 2.1 Flash-Next first load (`fit.sh flashnext all`, 13 Sep 10:41–10:43, GPU healthy, master build b10936)
+
+`NCMOE=all` (every expert tensor in CPU RAM, attention/shared/embeddings on Vulkan0) came **UP in 49 s** — no unsupported-op
+abort, no QSA/lazy-read complaint in `serve.out`, pid 12497. Footprint: **VRAM 12 391 MiB** of 16 384 (`--ctx-size 262144`
+q8_0 KV), **RSS 57.9 GiB**, Wired 63 GiB, 61 GiB free — i.e. the whole 62.4 GB model is resident (`--load-mode none`, no
+mmap), ARC untouched at 769 MiB. Load-time baseline for the fit ladder: with ~4 GiB VRAM headroom the first ladder step is
+`NCMOE=46` (≈ 37 experts-layers ≈ 1.1 GiB each? — measure, the 122B numbers in §1 suggest ~0.9 GiB/layer for this quant).
+Functional chat request, fit ladder `46 44 42 40`, `IGPU_MOE` three-way variants and `BENCH=bench` sweeps follow when the
+GPU is free between the T1 E2E models (T1 has priority per the owner, 10:43). `~/local-ai-runs/fit-flashnext.log`.

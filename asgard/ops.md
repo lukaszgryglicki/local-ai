@@ -173,6 +173,36 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
 
 | 08:36–08:50 | Flash-Next shard 2 `VERIFIED_OK` (sha256 of 49.8 GB took 9 min — no SHA-NI, cores at the EPP-100 clocks), shard 3 downloading (ETA ≈ 10:00 incl. verify). ARC cap lowered for the 87 GiB fits: `sysctl vfs.zfs.arc.max=8589934592` (+ `/etc/sysctl.conf` l.22 16 → 8 GiB); ARC fell to 7 GiB at once but Wired stayed 21 GiB until `debug.uma_reclaim=2` drained the UMA caches → **Wired 11 GiB, Free 111 GiB** (asgard pattern confirmed: ARC eviction alone does not return the memory; always follow with `uma_reclaim`). Harness prep: `fit.sh` logs server RSS + Mem/ARC lines and accepts `k=all`; `sweep.sh` `BENCH=bench` mode (bench.py depths instead of codebench, for the slow T2 placement sweeps); `serve.sh` `DRY=1` prints the argv (verified iGPU → cpu-moe override order). |
 
+| 09:49–10:06 | Owner power actions for the GPU pin: warm reboot 09:49 (still pinned, 15.31 t/s), `zzz` 09:58 (still pinned, 16.31 t/s), **cold power-off + 30 s power-button hold 10:04 → released** (57.97 t/s, 1830 MHz P0). `sysrc webcamd_enable=YES` (was NO), service running. Download queue restarted after each boot. `nvpowersrc` says `battery` in both states → constant on FreeBSD, not diagnostic (results-t1.md §3.1.2). |
+| 10:05–10:16 | **PCH incident:** queue re-hash of shard 2 (`sha256 -q`, lid closed 10:05:30) + depth bench → PCH 95 °C 10:07:35, watchdog capped the CPU 2000 → 1200 MHz by 10:08:04 (bench row invalid, killed 10:10); PCH kept climbing to **107 °C** with the sha256 alone (cores 36 °C). `kill -STOP` of the sha256 10:13:23 → 82 °C in 60 s. Lid opened 10:15:57 (owner). |
+| 10:17–10:21 | Watchdog IO duty-cycle (SIGSTOP/SIGCONT of `sha256 -q` at PCH 90/78 °C) deployed 10:17:54 — **reverted 10:21:31 on the owner's instruction** (`cmp` against the saved original: identical; conf identical). sha256 resumed 10:21:33, finished 10:22:17 (`VERIFIED_OK` shard 2). |
+| 10:23 | `/data/scripts/temp.sh`: Quadro SM/mem clocks (+max) and clock-limit reasons added, PCH line now shows pm threshold 77 / hw link throttle T0/T1/T2 108/111/114 / catastrophic 120 °C (was "self-throttles at 77"). |
+| 10:24–10:29 | `download.sh`: markers `models/.verified/NAME`, hashing via `verify-slow.py` under nice; markers written by hand for Flash-Next shards 1–2 (both passed today); `dl-t2-queue.sh` under `lockf -t 0 ~/local-ai-runs/dl-t2.lock`; old chain killed top-down (queue sh, download.sh, its sha256 of shard 3), queue restarted 10:24:31. First `verify-slow.py` (40 MB/s cap) still took the PCH 79 → 97 °C → replaced 10:28 by the closed-loop version (pause ≥ 84, resume ≤ 74 °C); shard 3 hashed 10:29–10:4x at PCH 73–85 °C. |
+| 10:31 | GPU health check under load with the CPU still capped (1.6 GHz): `gpu-check-1031` **63.47 t/s**, SM 1680–1935 MHz P0, 108 W, limit reason `sw-power-cap` only; idle P8 300 MHz. GPU is healthy. |
+| 10:35–10:38 | `verify-slow.py` v3: `--burst 40 --cool 15` defaults (owner), PCH safety net 100 → 85 °C, `--mbps`, `VERIFY_*` env; self-tested on the VM (digest match). `wait-no-verify.sh` + calls in `sweep.sh` (per config) and `e2e-all.sh` (per task). Pure downloads measured harmless (PCH 64–67 °C all morning) — only verification windows block timing runs. |
+| 10:36 | Owner: `WD_PCH_HI=100`, `WD_PCH_LO=90` (were 95/85; CRIT 115 unchanged) in `/usr/local/etc/thermal-policy.conf`, `service thermal_watchdog restart` (pid 86464). |
+- 13 Sep 10:41–10:43 — `fit.sh flashnext all` on the master build: UP 49 s, VRAM 12 391 MiB, RSS 57.9 GiB (results-t2.md §2.1).
+- 13 Sep 10:44:48 — **T1 chain started**: `daemon -f -o ~/local-ai-runs/t1-chain.log ~/local-ai-runs/t1-chain.sh` — sweeps
+  kat-q4 (`cpu19`, `cpu19-ngram`, `igpu19`, `cpu19-t16`) → qwen35b-q8 (`cpu29`…) → qwen35b-q4 (`cpu20-ac2`, `cpu20-nohost`,
+  `cpu20-t16`) → depth bench q4 → E2E rust/go/c/asm on qwen35b-q4, kat-q4, qwen35b-q8 with an all-VRAM pin check before each.
+- 13 Sep 10:48 — iGPU clock control confirmed: i915 sysfs knobs are sysctls (`sys.class.drm.card0.gt_{min,max,boost}_freq_mhz`,
+  RPn 350 / RP0 1250, RPS up/down 95/85 %). `sudo sysctl sys.class.drm.card0.gt_min_freq_mhz=1250` took effect at once
+  (`gt_cur_freq_mhz` 350→1250; `gt_act` stayed 350 only because the iGPU was parked) and was reverted to 350. Sampler
+  `~/local-ai-runs/igpu-freq-sampler.sh` (5 s, 4 h) logs act/cur/req + the server's `--device` list to `igpu-freq.log` to
+  show whether the clock climbs by itself under the `igpu19`/`igpu29` sweep configs (results-t1.md §3.4).
+- 13 Sep 10:58:07 — **AC adapter Off Line again (4th)**, at the `cpu19-t16` load step; noticed 11:12 from the watchdog's `ac=0`
+  / 6 W / 900 MHz lines and the q8 `cpu29` 4.3 t/s. 11:14 killed t1-chain.sh (18976/18754), sweep.sh (32621), codebench
+  (47314), `stop.sh` (llama 3019) — results after 10:58 invalid (results-t1.md §3.1.2, §4.2, §5.2). Download queue and iGPU
+  sampler left running. Battery 79 % at 11:16, ~50 W draw before the stop.
+- 13 Sep 11:16 — new `asgard/wait-ac.sh` (block while on battery, +60 s settle, 6 h max) wired into `sweep.sh` (per config,
+  START line now has `ac=`) and `e2e-all.sh` (per task). Chain 2 `~/local-ai-runs/t1-chain2.sh` started: wait-ac → GPU pin
+  check (all-VRAM bench ≥ 55 t/s, SM ≥ 1600) → kat-q4 `cpu19-t16` re-run → q8 sweep → q4 variants → depth bench → E2E ×3.
+- 13 Sep 11:27:54 — mains back (owner replug). 11:29:01 chain 2 resumed → 11:29:49 pin check **PINNED** (16.32 t/s, 1035 MHz)
+  → chain 2 exit 2. Cold power-off procedure requested from the owner; download queue left running (clean `shutdown -p`
+  resumes the `.part` via `--continue-at -`; the queue and chain 2 are restarted by hand after boot).
+- 13 Sep 11:33 — owner-requested driver reload (`kldunload nvidia-modeset` + `kldload nvidia-modeset`, both nvidia modules
+  re-attached per dmesg): pin unchanged (16.49 t/s, 1035 MHz P2). Cold power-off procedure handed to the owner.
+
 ## 7. At the real end (when the research phase is over)
 
 - Boot start: remove `nostart` from the `KEYWORD` line of `asgard/rc.d/llama`, reinstall the stub

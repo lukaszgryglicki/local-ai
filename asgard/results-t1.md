@@ -124,6 +124,11 @@ runs on the Quadro. `models.sh`: `MODEL_NCMOE=20` confirmed for `qwen35b-q4`.
 P2/1035 MHz and the CPU parked at 0.9–1.1 GHz — and are recorded only as the trail that led to the discovery. Re-run,
 then start `e2e-all.sh qwen35b-q4`.
 
+- 13 Sep 10:07 first re-run attempt (GPU healthy after §3.1.2) **invalid again**, this time FAIL-infra of a new kind: the
+  download queue's `sha256` of a 49.8 GB shard pushed the PCH to 95–100 °C and the watchdog capped the CPU to 1.2 GHz
+  (§3.3) — `q4cpu20-ac,2048: pp 113.5, tg 16.6 t/s` (healthy ≈ 982 / 30). Killed 10:10. Re-run only through the
+  `wait-no-verify.sh` guard (no verification running, `thermal-policy.ratio` = 53).
+
 ## 3. Infra event — **AC power lost 23:10:41** (FAIL-infra; no model or run is charged with it)
 
 `/var/log/messages`: `Sep 12 23:10:41 asgard kernel: acpi_acad0: Off Line` — the only AC event since the 05:55 boot
@@ -233,6 +238,53 @@ does not do it, a reboot is the remaining option (owner's call). Pending anyway:
   number stays invalid (memory fits, functional checks, downloads and docs continue); healthy reference ≈ 57–61 t/s on
   `GEN=256 bench.py X 64` with `qwen35b`.
 
+#### 3.1.2 Released 10:04 (13 Sep) — only a cold power-off with a power-button hold did it; what the pin really was
+
+- **09:49 warm reboot** (`shutdown -r`): still pinned — bench `post-reboot` 15.31 t/s, 1035 MHz P3. (`webcamd_enable=YES`
+  was set on the way, it had been explicitly NO.)
+- **09:58–09:59 S3 suspend/resume** (`zzz`, no model loaded, power button to wake): still pinned — `post-zzz` 16.31 t/s,
+  P2 1035/6801 MHz. XFCE came back without a mouse pointer until a VT switch and back (a resume hook is a candidate fix; the
+  10:15 lid open/close cycle restored it fine).
+- **10:04 full power-off, AC unplugged, power button held 30 s, boot 10:05: RELEASED** — `post-poweroff` **57.97 t/s** at
+  depth 64, 1830 MHz P0, 107 W (healthy 57–61). Re-checked 10:31 with the CPU capped at 1.6 GHz by §3.3 (`gpu-check-1031`):
+  **63.47 t/s**, SM 1680–1935 MHz P0, 108 W, only clock-limit reason `sw-power-cap` (the normal power limiter); idle drops
+  to P8 / 300 MHz afterwards.
+- **Corrections.** (1) `nvpowersrc` says `battery (1)` in *both* states (checked 10:06 on the healthy GPU): on FreeBSD the
+  RM's power-source field is simply never updated (§3.1.1, no ACPI path) — it is a constant, **not** a pin indicator.
+  (2) **1035 MHz is the RTX 5000 Mobile base clock**, so the pin was exactly "boost disabled" — the PMU's DC clock limit.
+  (3) A GPU with no client attached that is woken by an `nvidia-smi` query also reports 1035 MHz P0 for a few seconds (RM
+  re-init default, 17–18 W) — that is *not* a pin; only a **loaded** GPU sitting at 1035 MHz is. `/data/scripts/temp.sh` now
+  prints SM/mem clocks, max clocks and the limit reasons with that caveat.
+- **What tripped it.** `/var/log/messages` `acpi_acad0`: Off Line **23:10:41 → On Line 00:01:01 (50 min)**, Off 00:01:29 →
+  On 00:01:31, Off 06:47:55 → On 06:48:16 (the owner's replug). `tuxi` on the same mains stayed up (1 d 16 h) → not a mains
+  outage: the adapter's output (or the barrel/ID-pin contact) dropped. A 50-minute gap under E2E load (GPU 108 W + turbo CPU
+  ≈ 200+ W at the wall) matches a Dell 240 W brick's over-temperature cut-out, and the EC then latches the GPU's DC line
+  until flea power is drained. Owner: check the brick's temperature/seating; if it recurs under load, swap the adapter.
+- **It recurred — 4th dropout 13 Sep 10:58:07** (`acpi_acad0: Off Line`, watchdog `AC POWER LOST` 10:58:12, still off at
+  11:16, battery 100 → 79 % in 18 min at ~52 W draw): one second after `sweep.sh kat-q4 cpu19-t16` came UP and the first
+  codebench request hit GPU + 8 CPU threads at once, i.e. exactly at a load step — like 23:10:41 (mid-E2E). Nobody touched
+  the plug (owner away, lid open). Two of four drops sit on load transients → over-current/over-temperature trip in the
+  brick or a marginal barrel/ID-pin contact, not mains (`tuxi` fine again). Effects: CPU 898–998 MHz at 6 W package,
+  Quadro P5 360 MHz / 23 W with no limit reason flagged (`freq_levels` reads `2400/-1` on mains too — not diagnostic) — so every
+  number taken on battery is silently 3–4× low (`cpu19-t16` 7.2 t/s, `qwen35b-q8 cpu29` 4.3 t/s = both INVALID, FAIL-infra).
+  Fix on the software side: `asgard/wait-ac.sh` (blocks while `hw.acpi.acline=0`, +60 s settle) now runs before every
+  sweep config and every E2E task, sweep START lines carry `ac=`, and chain 2 re-checks the GPU for the 1035 MHz pin before
+  it resumes. Owner side: reseat/replace the 240 W brick (check its wattage label and heat), try another outlet/cable.
+- **11:27:54 mains back (owner unplugged/replugged the brick — "it was discharging, I don't know why"), battery charging at
+  39 W. 11:29:49 chain-2 pin check on the all-VRAM model: tg 16.32 t/s, SM max 1035 MHz under load → PINNED again**, exactly
+  as after the 23:10 drop. So the rule is confirmed: *every* AC-adapter drop with a loaded GPU ends in the 1035 MHz boost
+  lock, and only the cold power-off (+ AC unplugged + 30 s power-button hold) releases it. Until the adapter/jack is fixed,
+  each load-step drop costs a power cycle — chain 2 exits with code 2 on a pinned GPU instead of measuring garbage.
+- **11:33 driver reload tried (owner's idea): `kldunload nvidia-modeset` (took nvidia.ko with it), 8 s, `kldload nvidia-modeset`** —
+  dmesg shows the second `nvidia0: <Quadro RTX 5000>` attach, Xorg unaffected (it runs on i915 `card0`). Loaded bench right
+  after: **16.49 t/s, SM 1035 MHz in P2 at 57 W, no Clocks-Event reason flagged → still pinned.** Consistent with the 09:49
+  warm reboot (a full driver re-init on mains) not helping: the DC boost limit is held outside the driver (EC → GPU
+  power-source signal / PMU latch), so nothing software-side clears it. Cold power-off remains the only remedy.
+- **Rules from here.** Pin check = `./start.sh vram; GEN=256 python3 bench.py X 64` → ≥ 55 t/s **and** SM ≥ 1600 MHz P0 under
+  load (`nvidia-smi --query-gpu=clocks.sm,pstate`), done before and after every E2E model. Remedy order if pinned: cold
+  power-off + AC unplugged + 30 s power-button hold (the only thing that worked); warm reboot and S3 do not. The watchdog logs
+  `AC POWER LOST` on `hw.acpi.acline` changes since 01:xx, so the next drop is visible in `/var/log/thermal.log` at once.
+
 ### 3.2 Second FAIL-infra of the night, fixed: ZFS ARC starved the NVIDIA pinned host buffers (00:53–01:05)
 
 `ALL=1 fit.sh qwen35b-q8 27 29 31 33` died at every k within 17–30 s: 24× `ggml_vulkan: Failed to allocate pinned memory
@@ -278,6 +330,61 @@ grows on any big read (ports, `git fetch`, the 240 MB llama.cpp fetch this morni
 cap stays (16 GiB now, 8 GiB for the 87 GiB Flash-Next fits) for the whole T2 phase, and `arc-flush.sh`'s trick becomes
 `debug.uma_reclaim=2` when Wired does not follow the ARC down. Revisit `arc.max=0` only after T2 is frozen.
 
+### 3.3 Third FAIL-infra class, 13 Sep 10:05–10:45: the PCH heats under *any* sustained NVMe read stream
+
+- **Timeline.** Queue restart after the power-off → `sha256 -q` of Flash-Next shard 2 (49.8 GB) from 10:05:22, lid closed
+  10:05:30; depth bench started 10:07. PCH 95 °C at 10:07:35 → watchdog `HOT … -> cap 2000/1800/1600/1400/1200 MHz` by
+  10:08:04 (that is what made §2.3's row invalid). Bench and server stopped 10:10 — the PCH **kept rising: 103 → 107 °C** at
+  10:12:36 with the sha256 as the only load, every core at 36–37 °C, NVMe 55–58 °C, CPU at 1.1 GHz. `kill -STOP` on the
+  sha256 at 10:13:23 → **93 °C after 10 s, 82 °C after 60 s**, 71 °C at 10:16. Lid opened 10:15:57.
+- **Rate is not the lever.** A 40 MB/s rate-limited hasher (`zpool iostat`: exactly 40.0 MB/s) took the PCH **79 → 97 °C in
+  4 min** (10:24–10:28, lid open), same slope as the 98 MB/s `sha256`. Any sustained read keeps the four PCH PCIe links + DMI
+  out of L1: the PCH die jumps ~8–10 °C within seconds, then creeps ~6 °C/min; it falls just as fast when the reads stop.
+  Downloads alone are harmless (curl writes ~10 MB/s in txg bursts: PCH 64–67 °C, cap 5300, all morning 07:50–09:40).
+- **What the hardware/kernel offers, checked:** `pchtherm` T0/T1/T2 hardware link throttle = **108/111/114 °C**, CTT 120
+  (BIOS-locked, read-only) — exists, far too high; `pmtemp` 77 °C is only the power-management threshold (temp.sh used to
+  call it "self-throttles at 77", corrected). NVMe HCTM 70/77 °C acts on the *drive's* temperature (drives sat at 45–58 °C).
+  `rctl readbps/writebps throttle` needs `kern.racct.enable=1` (loader.conf + reboot) and accounts buffer-cache IO only —
+  ZFS bypasses it. `gnop -r/-w` delay layers cannot be inserted under the live root pool. ZFS vdev tunables only reduce
+  concurrency. → the duty cycle has to be done by the reader itself.
+- **Fixes (all in `download.sh`'s path, nothing else):** `asgard/verify-slow.py` — duty-cycled sha256, **40 s burst / 15 s
+  gap** by default (owner's choice 10:35, first tried on the next file = `qwen122b`), PCH safety pause at 100 °C → resume
+  85 °C, `--burst/--cool/--pch-hi/--pch-lo/--mbps` args or `VERIFY_*` env; its first closed-loop version (pause ≥ 84, resume
+  ≤ 74) did Flash-Next shard 3: 20 s bursts at ~135 MB/s (CPU capped), 15–35 s gaps, PCH 73–85 °C, cores 35 °C.
+  `download.sh` writes a marker `models/.verified/NAME` (`bytes sha256 date`) after a pass and never re-hashes a marked file
+  (`REVERIFY=1` forces) — the old re-hash-on-every-run plus queue restarts is where the *two* simultaneous sha256 at 101 °C
+  came from; `dl-t2-queue.sh` runs under `lockf -t 0`. `wait-no-verify.sh` is called by `sweep.sh` (per config) and
+  `e2e-all.sh` (per task): no timing run starts while a verification runs. A watchdog-side SIGSTOP/SIGCONT duty cycle was
+  deployed 10:17 and **reverted 10:21 on the owner's instruction** (byte-identical restore verified); the owner instead
+  raised the conf to `WD_PCH_HI=100 / WD_PCH_LO=90` (10:36, CRIT 115 unchanged).
+- **Rule.** Before any speed number: `pgrep -f verify-slow` empty, `cat /var/run/thermal-policy.ratio` = 53, PCH < 85 °C.
+  Verification windows are logged in `~/local-ai-runs/dl-t2.log` (`verify-slow HH:MM:SS start/done`) — an E2E task that
+  overlaps one gets it noted in the report (mid-task overlaps are unavoidable, the download queue must not wait for E2E).
+
+### 3.4 iGPU clock: knobs and behaviour under load (13 Sep)
+
+The Intel UHD P630 (i915, `card0`) exposes its Linux sysfs frequency files as sysctls through linuxkpi:
+
+| sysctl (`sys.class.drm.card0.`) | value | meaning |
+|---|---|---|
+| `gt_RPn_freq_mhz` / `gt_RP1_freq_mhz` / `gt_RP0_freq_mhz` | 350 / 350 / 1250 | hardware floor / efficient / max |
+| `gt_min_freq_mhz`, `gt_max_freq_mhz`, `gt_boost_freq_mhz` | 350, 1250, 1250 | **RW (root)** software limits |
+| `gt_cur_freq_mhz` / `gt_act_freq_mhz` / `gt.gt0.punit_req_freq_mhz` | dynamic | RPS request / actual hw clock / PUnit request |
+| `gt.gt0.rps_up_threshold_pct` / `rps_down_threshold_pct` | 95 / 85 | RPS busy thresholds (gen9 host-managed RPS) |
+
+- Control works: `sudo sysctl sys.class.drm.card0.gt_min_freq_mhz=1250` → `gt_cur_freq_mhz` 1250 immediately (10:48:1x);
+  `gt_act_freq_mhz` follows only while the iGPU is awake (parked/RC6 it reads 350). Reverted to 350 afterwards; RPS then
+  stepped `cur` 1250 → 733 by itself on the next Xorg wake, i.e. the dynamic scaling is alive on FreeBSD too.
+- Automatic climb under an `IGPU_MOE` load: measured by `~/local-ai-runs/igpu-freq-sampler.sh` during the `igpu19`
+  (kat-q4) and `igpu29` (qwen35b-q8) sweep configs — see the table below (filled when those configs have run).
+- If RPS ever sits below 1250 under expert load (bursty kernels can stay under the 95 % up-threshold), the fix is a
+  one-liner per run: `gt_min_freq_mhz=1250` before `start.sh`, `=350` after — a candidate `IGPU_MIN_MHZ` hook for
+  sweep.sh/start.sh, only worth adding if the sampler shows it is needed.
+
+| config | server `--device` | act MHz min / typical / max while generating | note |
+|---|---|---|---|
+| `igpu19` kat-q4, 10:54:40–10:55:10 (generating) | `Vulkan0,Vulkan1` | 350 (1 RC6 dip) / **1150** / 1250 — RPS request 1217–1250 the whole time | climbs within 5 s of the first expert kernels (act 1150 already during the model upload at 10:54:25); 1150 rather than 1250 most of the time = package-power sharing with the CPU threads, not RPS |
+
 ## 4. `kat-q4` — KAT-Coder-V2.5-Dev Q4_K_L (Qwen3.6-35B-A3B fine-tune, `VERIFIED_OK` 23:18)
 
 ### 4.1 Fit ladder (`ALL=1 fit.sh kat-q4 18 20 22`, then k=19 by hand, 00:26–00:31; memory only → valid despite the clock pin)
@@ -290,12 +397,31 @@ cap stays (16 GiB now, 8 GiB for the 87 GiB Flash-Next fits) for the whole T2 ph
 | 22 | 13 863 MiB | — |
 
 Q4_K_L is ~0.42 GiB/layer lighter than UD-Q4_K_XL (14 725 vs 15 144 at k=20), hence one layer more in VRAM.
-`models.sh kat-q4 MODEL_NCMOE=19`. Speed sweep and E2E: after the GPU boosts again.
+`models.sh kat-q4 MODEL_NCMOE=19`. Speed sweep: §4.2 (13 Sep). E2E: chain after the sweeps.
 
 **Functional check 01:22 (pinned GPU, one chat request, `enable_thinking: true`):** llama-server picks the Qwen3 template
 ("chat template supports preserving reasoning"), thinking lands in `reasoning_content` (118 chars), the answer in `content`
 (a correct SWAR `popcount64` + complexity note), `finish_reason=stop`, 406 tokens in 29.7 s ≈ 13.7 t/s under the pin (k=19).
 Same kwargs/sampling as `qwen35b`, so `sweep.sh kat-q4 "none=none"` and `e2e-all.sh kat-q4` need no template work.
+
+### 4.2 Speed sweep (`sweep.sh kat-q4`, 13 Sep 10:47–10:59, GPU healthy — first T1 numbers without the clock pin)
+
+`codebench.py LABEL 2` (two short coding prompts, thinking on, own EOS), GAP 150 s, PCH 69–86 °C, cap 5300 throughout,
+no verification overlap (`wait-no-verify.sh` idle). CSV: `~/local-ai-runs/sweep-kat-q4.csv`.
+
+| config | placement of the 19 expert layers | tg t/s (aggregate) | pp t/s (48 / 52-token prompts) | wall s (2 prompts) | note |
+|---|---|---|---|---|---|
+| `cpu19` (`NCMOE=19`, THREADS 8) | CPU RAM | **25.22** | 79 / 99 | 26 | baseline = `models.sh` default |
+| `cpu19-ngram` (`SPEC=ngram-mod`) | CPU RAM | **26.48** | 66 / 92 | 25 | +5 % tg, −15 % pp — not worth it on 200–400-token answers |
+| `igpu19` (`IGPU_MOE=19 NCMOE=0`) | iGPU (Vulkan1, shared RAM) | 16.78 | **6.3 / 7.1** | 53 | tg −33 %, pp 12× slower; iGPU clock was 1150–1250 MHz while generating (§3.4) |
+| `cpu19-t16` (`THREADS=16`) | CPU RAM | ~~7.21~~ **INVALID** | ~~41 / 33~~ | — | **the AC adapter dropped at 10:58:07, one second after this config came UP** (`acpi_acad0: Off Line`; battery = CPU 1 GHz / 6 W, GPU P5 360 MHz) → FAIL-infra, re-run pending on mains (chain 2) |
+
+Conclusion for `kat-q4` (three valid configs, all on mains — the 10:58:07 AC drop came *after* `igpu19` ended 10:55:14):
+**VRAM + CPU RAM (`NCMOE=19`, 8 threads, no spec)** — 25 t/s is 4× the T1 goal (≥ 6) and even above the "ideal" 15–25 band
+of T0. The iGPU/RAM split is out for the T1 models (same verdict as `qwen35b-q4` on 12 Sep: `igpu20` 16.2 vs `cpu20` ~25):
+the UHD P630 is simply too weak for the expert matmuls, and it is *catastrophic* for prompt processing (6–7 t/s — a
+100 K-token coding context would take hours). ngram-mod stays off (spec gains vanish on real reasoning output). THREADS=16
+still has to be measured (re-run in chain 2). E2E rust/go/c/asm with these settings: chain step after the sweeps.
 
 ## 5. `qwen35b-q8` — Qwen3.6-35B-A3B Q8_0 (36 903 140 320 B, `VERIFIED_OK` 00:52 after a curl short-read at 32.4 GB and a resume)
 
@@ -311,4 +437,7 @@ Same kwargs/sampling as `qwen35b`, so `sweep.sh kat-q4 "none=none"` and `e2e-all
 ≈ 815 MiB per Q8 expert layer (vs ≈ 460 for UD-Q4_K_XL, ≈ 420 for KAT Q4_K_L); k=28 would land at ~15.8 GiB = the
 "UP-but-OOM at first decode" zone. `models.sh qwen35b-q8 MODEL_NCMOE=29` (was the plan estimate — confirmed). Speed
 sweep and E2E: after the GPU boosts again. Even pinned, 7.3–8.0 t/s already sits inside the T1 goal band (≥ 6, ideal 7–10).
+
+### 5.2 Speed sweep — first attempt 13 Sep 11:03 INVALID (on battery since 10:58:07, §3.1.2): `cpu29` prompt 0 gave tg 4.26 /
+pp 23 t/s with the CPU at 1 GHz and the Quadro in P5; killed at 11:14. Re-run on mains: chain 2 (`~/local-ai-runs/t1-chain2.sh`).
 
