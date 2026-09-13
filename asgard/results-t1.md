@@ -163,9 +163,20 @@ the prompt), so the deepest point is 66.5K, not 131K. Two observations for the T
 
 ### 2.4 E2E rust/go/c/asm (chain 2, `e2e-all.sh qwen35b-q4`, started 13 Sep 12:52 after pin check 61.19 t/s)
 
-| task | wall | result | server-side speed | verdict | note |
-|---|---|---|---|---|---|
-| rust | 155 s (11 turns) | agent: success | pp 566 t/s (22 865-token system prompt), tg 27.7 t/s aggregate at 23–27K depth (per-request 22.3–31.8) | **FAIL-task** (`build=1 test=1 roundtrips=1 signature=0 nodeps=1`) | wrote `fn reverse(s: &str) -> String` — the spec says `pub fn`; everything else passed (4 unit tests, 18/18 round-trips incl. Polish + emoji, no deps, `chars().rev()`). Same rule failed nobody else: T0 `qwen35b` (IQ2_M) and gemma wrote `pub fn`. A spec-compliance miss, not a capability one — but a FAIL-task by the fixed rules |
+**Grading (introduced 13 Sep, owner's ranking; `asgard/scoreboard.py` computes it from every `summary.txt`, retroactively for T0):**
+`FAIL-infra` = the machine compromised the run (battery marker etc.; not charged to the model) · `FAIL-task s/T (which checks)` =
+the program failed T−s of the verifier's T checks — *spec-only* when everything functional passed and only a spec rule
+(signature, nodeps, vet, strict, nolibc) was missed · `PASS s/T` = all checks passed; turns / tool calls / errors, wall and the
+verifier's quality lines say *how good* the run was. The verifiers keep their old output and append `score= functional= spec=`.
+
+| model | task | grade | wall | turns / tool calls / errors | tg t/s (agg; min–max) | max depth | quality | notes |
+|---|---|---|---|---|---|---|---|---|
+| qwen35b-q4 | rust | FAIL-task 4/5 (spec-only: signature) | 155 s | 11 / 10 / 2 | 27.7 (22.3–31.8) | 26K | tests=4, unsafe=0, roundtrips=18ok/0bad | — |
+| qwen35b-q4 | go | no verdict (running?) | — | — | — | — | — | — |
+
+rust: wrote `fn reverse(s: &str) -> String` where the spec says `pub fn` — 4 unit tests, 18/18 round-trips (Polish, emoji,
+combining marks), no deps, `chars().rev()`; T0 `qwen35b` (IQ2_M) and gemma wrote `pub fn` under the same rule. The graded
+scale exists for exactly this case: a 4/5 spec-only miss, not a broken program.
 
 ## 3. Infra event — **AC power lost 23:10:41** (FAIL-infra; no model or run is charged with it)
 

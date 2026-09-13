@@ -616,3 +616,30 @@ the project). `e2e-all.sh MODEL` runs the four in order with 60 s gaps and print
 Vectors come from `e2e-vectors.py N` (seed 20 260 911, hex ↔ base64, lengths 0–~3 KB); the verifier regenerates them
 rather than trusting the copy the model saw. All verifiers were validated against my own reference implementations
 before any model ran (Go 47/47, C 420 lines, ASM 15/15 + toolchain).
+
+## Addendum 13 Sep — graded scoreboard (`asgard/scoreboard.py`, computed from the VERDICT bits of every summary.txt)
+
+Scale: `FAIL-infra` (machine, not charged) · `FAIL-task s/T (failed checks)` — *spec-only* when only a spec rule was missed ·
+`PASS s/T` with turns / tool calls / errors, wall and verifier quality lines for *how good*. The binary verdicts above are
+unchanged; this table adds how far each failure was from passing (e.g. gemma/north go = 46 of 47 comparisons right).
+
+| model | task | grade | wall | turns / tool calls / errors | tg t/s (agg; min–max) | max depth | quality | notes |
+|---|---|---|---|---|---|---|---|---|
+| gemma | rust | **PASS 5/5** | 274 s | 12 / 11 / 4 | 37.1 (25.5–58.9) | 31K | tests=4, unsafe=0, roundtrips=18ok/0bad | — |
+| gemma | go | FAIL-task 4/5 (functional: comparisons) | 161 s | 10 / 9 / 2 | 55.8 (30.7–85.9) | 28K | cmp=46ok/1bad | — |
+| gemma | c | FAIL-task 2/5 (functional: maketest, selftest_asan, comparisons) | 35 min | 20 / 19 / 10 | 36.8 (19.7–57.7) | 80K | asserts=6, malloc/free=6/2, arith=FAIL rc=1, 421/420 lines wrong; first…, malformed=ok, empty=ok | agent said error_during_execution |
+| gemma | asm | FAIL-task 0/4 (functional: as+ld, nolibc, checks, make) | 39 min | 24 / 23 / 0 | 30.3 (25.2–36.0) | 141K | — | — |
+| north | rust | FAIL-task 4/5 (functional: roundtrips) | 156 s | 11 / 14 / 1 | 23.0 (19.6–25.5) | 26K | tests=4, unsafe=0, roundtrips=0ok/18bad | — |
+| north *(superseded attempt 20260911-225430)* | rust | no summary (attempt lost - freeze/kill; see results-t0.md) | — | — | — | — | — | — |
+| north | go | FAIL-task 4/5 (functional: comparisons) | 16 min | 75 / 74 / 9 | 26.3 (12.1–53.6) | 56K | cmp=46ok/1bad | — |
+| north | c | FAIL-task 2/5 (functional: strict, selftest_asan, comparisons) | 38 min | 85 / 84 / 11 | 32.0 (11.7–56.1) | 101K | — | — |
+| north | asm | FAIL-task 2/4 (functional: checks, make) | 29 min | 63 / 62 / 21 | 25.5 (9.5–47.9) | 132K | vectors=encode 0/700, decode 0/700 | — |
+| qwen35b | rust | **PASS 5/5** | 110 s | 14 / 14 / 3 | 45.8 (38.9–47.7) | 28K | tests=4, unsafe=0, roundtrips=18ok/0bad | — |
+| qwen35b | go | **PASS 5/5** | 256 s | 20 / 19 / 2 | 44.0 (39.3–48.7) | 37K | 6MB=ok, cmp=47ok/0bad | — |
+| qwen35b | c | FAIL-task 4/5 (functional: comparisons) | 43 min | 117 / 116 / 15 | 34.8 (26.6–44.8) | 135K | asserts=26, malloc/free=4/7, arith=420ok, malformed=FAIL, empty=ok | — |
+| qwen35b | asm | FAIL-task 2/4 (functional: checks, make) | 240 min | — | 30.4 (18.1–43.0) | 234K | vectors=encode 1/700, decode 0/700 | hit the wall-time cap |
+| qwen9b | rust | FAIL-task 4/5 (functional: roundtrips) | 136 s | 9 / 12 / 3 | 26.8 (17.1–52.5) | 27K | tests=4, unsafe=0, roundtrips=13ok/5bad | — |
+| qwen9b | go | **PASS 5/5** | 575 s | 27 / 30 / 3 | 21.1 (13.9–34.0) | 39K | 6MB=ok, cmp=47ok/0bad | — |
+| qwen9b | c | FAIL-task 2/5 (functional: maketest, selftest_asan, comparisons) | 240 min | 81 / 317 / 42 | 14.3 (6.9–53.8) | 229K | asserts=0, malloc/free=7/11, arith=FAIL rc=1, 421/420 lines wrong; first…, malformed=FAIL, empty=ok | hit the wall-time cap |
+| qwen9b *(superseded attempt 20260912-060252)* | c | no summary (attempt lost - freeze/kill; see results-t0.md) | — | — | — | — | — | — |
+| qwen9b | asm | FAIL-task 2/4 (functional: checks, make) | 121 min | 101 / 127 / 35 | 15.7 (8.9–42.2) | 179K | vectors=encode 0/700, decode 0/700 | 2 resume(s), 2071 s downtime; agent said error_during_execution |

@@ -39,7 +39,11 @@ def pch():
 def parse(argv):
     opts = {"burst": float(os.environ.get("VERIFY_BURST", "40")), "cool": float(os.environ.get("VERIFY_COOL", "15")),
             "pch-hi": float(os.environ.get("VERIFY_PCH_HI", "88")), "pch-lo": float(os.environ.get("VERIFY_PCH_LO", "78")),
-            "mbps": float(os.environ.get("VERIFY_MBPS", "0"))}
+            "mbps": float(os.environ.get("VERIFY_MBPS", "0")),
+            # yield file (13 Sep): while it exists an E2E task is running - hashing then only heats the PCH into the watchdog's
+            # band (GPU load already holds it at ~80 C, so 88/78 pacing gets ~5 % duty and still trips 90 C) and would cap the CPU
+            # under the task. e2e-test.sh creates/removes it; wait-no-verify.sh keeps the next task from starting while we hash.
+            "yield-file": os.environ.get("VERIFY_YIELD_FILE", os.path.expanduser("~/local-ai-runs/e2e.busy"))}
     args = []
     it = iter(argv)
     for a in it:
@@ -68,8 +72,23 @@ def main():
     burst_start = t0
     last_check = last_prog = 0.0
     paused = 0.0
-    gaps = safety = 0
+    gaps = safety = yields = 0
     pmax = 0.0
+    yf = o["yield-file"]
+
+    def yield_wait():
+        nonlocal yields, paused
+        if not yf or not os.path.exists(yf):
+            return False
+        yields += 1
+        p0 = time.monotonic()
+        log("YIELD pause #%d: %s exists (E2E task running), %.1f/%.1f GiB done" % (yields, yf, done / 2**30, total / 2**30))
+        while os.path.exists(yf):
+            time.sleep(15)
+        paused += time.monotonic() - p0
+        log("resume after yielding %.0f s (pch %s C)" % (time.monotonic() - p0, pch()))
+        return True
+
     log("start %s: %.1f GiB, burst/cool %.0f/%.0f s, pch safety hi/lo %.0f/%.0f C, rate cap %s, pch now %s C"
         % (os.path.basename(path), total / 2**30, o["burst"], o["cool"], o["pch-hi"], o["pch-lo"],
            "%.0f MB/s" % o["mbps"] if o["mbps"] > 0 else "none", pch()))
@@ -96,6 +115,9 @@ def main():
                 now = burst_start
             if now - last_check >= 1.0:                                  # safety net on the PCH
                 last_check = now
+                if yield_wait():
+                    burst_start = last_check = time.monotonic()
+                    continue
                 t = pch()
                 if t is not None:
                     pmax = max(pmax, t)
@@ -120,8 +142,8 @@ def main():
                 log("%.1f/%.1f GiB, pch %s C (max %.0f), paused %.0f s so far (%d gaps, %d safety pauses)"
                     % (done / 2**30, total / 2**30, pch(), pmax, paused, gaps, safety))
     el = time.monotonic() - t0
-    log("done %.1f GiB in %.0f s (hashing %.0f s at %.0f MB/s, paused %.0f s: %d gaps, %d safety pauses), pch max %.0f C, now %s C"
-        % (total / 2**30, el, el - paused, total / 2**20 / max(el - paused, 1e-9), paused, gaps, safety, pmax, pch()))
+    log("done %.1f GiB in %.0f s (hashing %.0f s at %.0f MB/s, paused %.0f s: %d gaps, %d safety pauses, %d yields), pch max %.0f C, now %s C"
+        % (total / 2**30, el, el - paused, total / 2**20 / max(el - paused, 1e-9), paused, gaps, safety, yields, pmax, pch()))
     digest = h.hexdigest()
     print(digest)
     if want is not None:

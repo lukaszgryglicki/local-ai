@@ -44,6 +44,7 @@ NUDGE=${RESUME_PROMPT:-"The model server was restarted and your last request fai
 last_result() { grep '"type":"result"' qwen.log | tail -1; }
 api_error() { last_result | grep -q '"result":"\[API Error'; }
 t0=$(date +%s); resumes=0; downtime=0
+BUSY=$RUNS/e2e.busy; touch "$BUSY"; trap 'rm -f "$BUSY"' EXIT INT TERM   # verify-slow.py yields while this exists (13 Sep)
 [ "${E2E_UNSTICK:-1}" = 0 ] || { "$d/unstick.sh" watch 30 >> unstick.log 2>&1 & UW=$!; }
 MODEL=$M timeout "${E2E_CAP:-14400}" "$d/qwen.sh" --yolo -o stream-json $QARGS "$PROMPT" < "$STDIN" >> qwen.log 2>&1
 rc=$?
@@ -68,7 +69,7 @@ while [ "$resumes" -lt "${E2E_RESUMES:-3}" ] && api_error; do   # self-heal: wai
   MODEL=$M timeout "${E2E_CAP:-14400}" "$d/qwen.sh" --yolo -o stream-json $ropt ${rarg:+"$rarg"} "$NUDGE" < /dev/null >> qwen.log 2>&1
   rc=$?
 done
-t1=$(date +%s); [ -n "${UW:-}" ] && kill "$UW" 2>/dev/null
+t1=$(date +%s); [ -n "${UW:-}" ] && kill "$UW" 2>/dev/null; rm -f "$BUSY"
 # AC adapter drops inside the task window (13 Sep: battery = CPU 1 GHz, GPU P5 -> the wall/t/s numbers are FAIL-infra, not the model's)
 acd=$(awk -v a="$t0" -v b="$t1" 'BEGIN{c=0} /acpi_acad0: Off Line/{cmd="date -j -f \"%b %d %H:%M:%S\" \""$1" "$2" "$3"\" +%s"; cmd | getline t; close(cmd); if (t>=a && t<=b) c++} END{print c}' /var/log/messages 2>/dev/null)
 acnow=$(sysctl -n hw.acpi.acline 2>/dev/null)

@@ -49,6 +49,12 @@ fallback, not queued. Disk: `zroot/data/local-ai` 1.6 TB free before the queue (
   The q8 sweep's `igpu29` config waited on `wait-no-verify.sh` the whole time, as designed. Shard 2 resumes on the queue's
   next pass (download.sh continued with shard 3 first).
 
+- **13 Sep 13:31 — verification yields to E2E tasks.** `verify-slow.py` pauses while `~/local-ai-runs/e2e.busy` exists (set by
+  `e2e-test.sh` for the duration of a task): under GPU load the PCH already sits at ~80 °C, so the 88/78 pacing degenerated to
+  ~5 % duty and still pushed the watchdog band once (cap 2400 under the running c task). Hashing now happens in the gaps between
+  tasks (`wait-no-verify.sh` holds the next task meanwhile). Shard 3 of qwen122b verified OK at 12:59 (27 GiB in 3.7 min, PCH max
+  89 °C); shard 2 (46.3 GiB, complete at 13:18) waits for the first gap; then the `qwen122b-iq4` download starts.
+
 ## 1. Build for Flash-Next — llama.cpp master b10936 + chunked-staging patch (`build-vulkan-master`, 07:13–07:17)
 
 `asgard/build-vulkan-master.sh` (new): `git fetch --tags origin` in the v0.4.0 tree, `git worktree add ../llama.cpp-master

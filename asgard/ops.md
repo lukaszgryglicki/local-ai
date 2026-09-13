@@ -226,6 +226,18 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   100 and its 115 crit, so it never pre-empts the watchdog during an E2E task). First 88/78 verification (qwen122b shard 3,
   27 GiB): 9–15 s bursts / 30 s cool-downs, PCH peaks 88–89 °C → the watchdog band (≥ 90) is not touched.
 
+- 13 Sep 13:05 — graded E2E scale (owner): `FAIL-infra` / `FAIL-task s/T (checks)` / `PASS s/T` + quality columns. `verify-{rust,go,c,asm}.sh`
+  append `score= functional= spec=` to the unchanged VERDICT line; new `asgard/scoreboard.py [--csv] [MODEL...]` builds the Markdown
+  table from `/data/ai/*-task-*/summary.txt` (retroactive: results-t0.md addendum, results-t1.md §2.4).
+
+- 13 Sep 13:18–13:31 — qwen122b shard 2 (46.3 GiB) verification started *inside* the `qwen35b-q4` c task: with the GPU holding the
+  PCH at ~80 °C the 88/78 pacing got 4–13 s bursts per 2–3 min cool-down (~5 % duty, hours to finish) and still tripped the
+  90 °C band once (13:25:21 → cap 2400 for 79 s under the task). Fix: `verify-slow.py` **yields** while `~/local-ai-runs/e2e.busy`
+  exists (`VERIFY_YIELD_FILE`; `e2e-test.sh` touches it at task start, removes it at the end + EXIT trap), so hashing runs only in
+  the gaps between tasks, where `wait-no-verify.sh` already holds the next task until the hash is done (46 GiB ≈ 7 min with the
+  GPU idle, cf. shard 3: 27 GiB in 3.7 min at 12:56). Old verifier killed (retry 2/6 of the queue), new one yielding since 13:31:13;
+  a one-off `busy-waiter.sh` clears the file when the c task's pre-patch `e2e-test.sh` (pid 7838) exits.
+
 ## 7. At the real end (when the research phase is over)
 
 - Boot start: remove `nostart` from the `KEYWORD` line of `asgard/rc.d/llama`, reinstall the stub
