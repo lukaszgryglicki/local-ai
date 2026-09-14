@@ -1,0 +1,47 @@
+asgard patch 0002 v2 - pad host-visible Vulkan allocations out of the NVIDIA FreeBSD driver (595.99.02) failing size windows
+[n*256 MiB, n*256 MiB + ~14 MiB) (n = 1..16 measured with pinprobe, 14 Sep 2026; results-t2.md 2.3): sizes within 32 MiB above a
+multiple of 256 MiB are padded to n*256 MiB + 128 MiB (mid-interval; v1 used +24 MiB). Applies on top of 0001 to both trees
+(v0.4.0 build-vulkan-2 and master build-vulkan-master). Disable at runtime with GGML_VK_HOST_ALLOC_PAD=0.
+
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -3637,6 +3637,29 @@
+         return buf;
+     }
+ 
++    // asgard patch 0002 (v2): the NVIDIA FreeBSD driver (595.99.02, Quadro RTX 5000) fails - or segfaults in - vkAllocateMemory
++    // for HOST-VISIBLE allocations whose size lies in [n*256 MiB, n*256 MiB + ~14 MiB) (measured for n = 1..16, with and
++    // without VK_EXT_memory_priority; the upper edge jitters by 1-2 MiB with the process' allocation history), and one
++    // such failure poisons every later allocation of the process (the next device-local allocation fails too). Sizes
++    // < 256 MiB never fail. Sizes within 32 MiB above a multiple of 256 MiB are padded to the middle of the 256 MiB
++    // interval, n*256 MiB + 128 MiB (<= 128 MiB of RAM per affected buffer, as far from both edges as possible); the
++    // logical buffer size stays `size`. GGML_VK_HOST_ALLOC_PAD=0 disables it.
++    size_t alloc_size = size;
++    {
++        static const bool pad_enabled = getenv("GGML_VK_HOST_ALLOC_PAD") == nullptr || atoi(getenv("GGML_VK_HOST_ALLOC_PAD")) != 0;
++        bool host_visible = false;
++        for (const auto & f : req_flags_list) {
++            if (f & vk::MemoryPropertyFlagBits::eHostVisible) {
++                host_visible = true;
++            }
++        }
++        const size_t window = 256ull << 20, danger = 32ull << 20, safe = 128ull << 20;
++        if (pad_enabled && host_visible && import_ptr == nullptr && alloc_size >= window && (alloc_size % window) < danger) {
++            alloc_size = alloc_size - (alloc_size % window) + safe;
++            VK_LOG_MEMORY("ggml_vk_create_buffer: host-visible size " << size << " padded to " << alloc_size << " (driver window)");
++        }
++    }
++
+     vk::BufferUsageFlags usage_flags = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst;
+     vk::MemoryAllocateFlags mem_flags {};
+     if (device->buffer_device_address) {
+@@ -3646,7 +3669,7 @@
+ 
+     vk::BufferCreateInfo buffer_create_info{
+         vk::BufferCreateFlags(),
+-        size,
++        alloc_size,
+         usage_flags,
+         vk::SharingMode::eExclusive,
+         0,

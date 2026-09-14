@@ -1,7 +1,7 @@
 #!/bin/sh
 # build-vulkan-master.sh - build a llama.cpp MASTER release tag (T2/Qwen3.8-Flash-Next needs >= b10889; plan §5) from the
 # git worktree ../llama.cpp-master into build-vulkan-master, with the same chunked-staging patch
-# (patches/0001-vulkan-chunk-staging-transfers.patch) and the same cmake configuration as build-vulkan-2.sh.
+# (patches/0001-vulkan-chunk-staging-transfers.patch + 0002-vulkan-pad-host-alloc-windows.patch) and the same cmake configuration as build-vulkan-2.sh.
 # The v0.4.0 tree (build-vulkan / build-vulkan-2, the T0 profile's binary) is never touched.
 #   TAG=b11020 ./build-vulkan-master.sh     (default: the newest b* tag already fetched; `git fetch --tags origin` first)
 # Run only when no E2E task / GPU work is running (shader compilation is CPU-heavy, ~5-10 min at nice 19).
@@ -11,13 +11,15 @@ SRC=${SRC:-$POC/../llama.cpp-master}
 B=${B:-$SRC/build-vulkan-master}
 J=${J:-$(sysctl -n hw.ncpu)}
 PATCH=/data/local-ai/asgard/patches/0001-vulkan-chunk-staging-transfers.patch
+PATCH2=/data/local-ai/asgard/patches/0002-vulkan-pad-host-alloc-windows.patch   # pad pinned allocs out of the driver windows (results-t2.md 2.3)
 TAG=${TAG:-$(git -C "$POC" tag -l 'b*' | sort -V | tail -1)}
 if [ ! -d "$SRC" ]; then git -C "$POC" worktree add "$SRC" "$TAG"; fi
 cd "$SRC"
 cur=$(git describe --tags --always)
 if [ "$cur" != "$TAG" ]; then git checkout -q -- . 2>/dev/null || true; git checkout -q --detach "$TAG"; fi
-git apply --check "$PATCH" 2>/dev/null && git apply "$PATCH"
-grep -q GGML_VK_STAGING_CHUNK_MB ggml/src/ggml-vulkan/ggml-vulkan.cpp || { echo "patch not applied"; exit 1; }
+for p in "$PATCH" "$PATCH2"; do git apply --check "$p" 2>/dev/null && git apply "$p"; done
+grep -q GGML_VK_STAGING_CHUNK_MB ggml/src/ggml-vulkan/ggml-vulkan.cpp || { echo "patch 0001 not applied"; exit 1; }
+grep -q GGML_VK_HOST_ALLOC_PAD ggml/src/ggml-vulkan/ggml-vulkan.cpp || { echo "patch 0002 not applied"; exit 1; }
 echo "building $(git describe --tags --always) -> $B"
 cmake -S "$SRC" -B "$B" -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DGGML_VULKAN=ON \
   -DGGML_NATIVE=ON -DGGML_CCACHE=ON -DGGML_OPENMP=OFF -DLLAMA_BUILD_TESTS=ON -DLLAMA_BUILD_EXAMPLES=OFF \

@@ -79,6 +79,9 @@ the 16:38 sweep):
   or oversized pinned allocation is not survivable — **keep pinned allocations away from failure**, do not rely on
   ggml's "fall back to CPU memory" path. Noted for T2, where the host buffers get large (`--no-host` is the escape hatch
   if a pinned allocation ever fails there).
+  *Update 14 Sep (results-t2.md §2.3):* the 515 MiB `token_embd` buffer failed because **the driver rejects host-visible
+  allocations sized in `[n·256 MiB, +≈14 MiB)`** (515 = 512 + 3), not because of the Intel allocation before it — the same
+  windows killed every qwen122b load; `patches/0002-vulkan-pad-host-alloc-windows.patch` (both builds) pads such sizes.
 - **True iGPU measurement on the T1 file** (23:05–23:10, `sweep.sh qwen35b-q4 "igpu20-true=none;--override-tensor
   token_embd.weight=Vulkan0;IGPU_MOE=20"`, VRAM 15 396 MiB): **tg 16.09 / 16.20 t/s, pp 5.6 / 7.0 t/s** against
   CPU-RAM 29.9 / 31.3 and 83–90 (§2) — the same 2× / 15× as on IQ2_M. `IGPU_MOE` is **retired** for T1/T2 (kept in
@@ -136,15 +139,17 @@ then start `e2e-all.sh qwen35b-q4`.
 **Valid run** (`GEN=64 bench.py q4cpu20-ac 2048 16384 65536 131072`, GPU healthy — pin check 60.23 t/s at 11:44, AC on,
 no verification, `settle.py` waited 80 s after the load for the turbo band: cap ratio 24 → 53, PCH 90 → 75 °C):
 
-| requested depth | tokens actually in context | pp t/s (whole prompt) | tg t/s (64 tokens) | wall s | note |
+| requested depth | new tokens evaluated (`prompt_n`; the prefix comes from the prompt cache) | pp t/s (new tokens) | tg t/s (64 tokens) | wall s | note |
 |---|---|---|---|---|---|
 | 2 048 | 1 953 | **831** | **32.5** | 4.3 | matches the sweep (`cpu20-ac2` 31.6) |
 | 16 384 | 15 364 | 758 | 33.0 | 22.2 | flat — the 20 offloaded layers cost nothing extra at this depth |
 | 65 536 | 50 180 | 412 | 26.6 | 124 | tg −18 % vs 2K |
-| 131 072 | 66 564 | 195 | 22.9 | 344 | **marginal pp for the last 16.4K tokens ≈ 75 t/s** (219 s); tg −30 % vs 2K |
+| 131 072 | 66 564 | 195 | 22.9 | 344 | 66.5K new tokens at depth 64–131K (341 s); tg −30 % vs 2K |
 
-The bench's filler text tokenises to fewer tokens than requested (50K for "65536", 66.5K for "131072" — `bench.py` caps
-the prompt), so the deepest point is 66.5K, not 131K. Two observations for the T1/T2 design:
+(Correction 14 Sep: the second column is the number of *newly evaluated* tokens — `bench.py` sends exact-token prefixes
+with `cache_prompt: true`, so each row only prefills the delta — and the deepest point really is 131K; the original
+reading "the prompt is capped at 66.5K" was wrong, see the headroom block at the end of this section.) Two observations
+for the T1/T2 design:
 
 - **Prefill is *not* CPU work here.** The watchdog's one-minute samples during the whole 6-minute 66.5K prefill show
   `pkg=6.7–7.4 W, freq 4.2–4.4 GHz on one core` — the CPU was idle; llama.cpp streams the CPU-resident expert weights to
@@ -153,8 +158,10 @@ the prompt), so the deepest point is 66.5K, not 131K. Two observations for the T
   the streaming runs out of the pinned host buffers. For T2 (all experts in RAM) this also means prefill speed will be
   set by PCIe streaming (7–8 GB of expert weights per 1024-token ubatch over PCIe 3.0 x16) plus attention — *not* by
   the 8 CPU cores — so the "≈ 65–120 t/s prefill" CPU-bound estimate is a floor, not the expectation.
-- **pp falls off a cliff past ~50K tokens** (412 → 195 t/s average, ≈ 75 t/s marginal) while T0's all-VRAM `qwen35b`
-  did a cold 64 436-token prompt at 591 t/s (results-t0.md). Candidates: with 15 144 of 16 384 MiB VRAM taken by weights
+- **pp at depth** (412 t/s for the 15–65K range, 195 t/s for 64–131K) while T0's all-VRAM `qwen35b` did a cold
+  64 436-token prompt at 591 t/s (results-t0.md) — first read as a VRAM-pressure cliff; the 14 Sep headroom test at the end
+  of this section shows it is the ordinary attention cost at depth (the candidates below are moot, kept as the trail).
+  Candidates considered then: with 15 144 of 16 384 MiB VRAM taken by weights
   + KV, the Vulkan compute/scratch buffers for flash-attention at 50K+ keys fall back to host memory
   (`GGML_VK_ALLOW_SYSMEM_FALLBACK`) or shrink; or the streamed-weights path serialises with the attention at depth.
   Measurable when the GPU is free: `NCMOE=22`/`24` (more VRAM headroom) at 65536/131072 depth vs `NCMOE=20`, and the
@@ -169,6 +176,32 @@ killed 07:04; reference pin check 07:05 `pin-0705,64: 16.32 t/s, 1035 MHz P2` = 
 As on 13 Sep only a cold power-off releases it (driver reload tried and failed then) → the k=22/24 headroom points and the
 flashnext fits wait for the owner's power cycle; the CPU-side and documentation work continues. Fourth AC event of the
 campaign (13 Sep 00:0x long, 06:47:55 21 s, 10:58:07 30 min, 14 Sep 07:02:00 12 s): every one of them left the GPU pinned.
+
+**Headroom measured 14 Sep 08:07–08:26 (chain 4 step 2, GPU healthy — pin check 63.27 t/s at 07:55, no AC event during the step, cap 5300 throughout):**
+`GEN=64 bench.py q4cpu2{2,4}-hd2 2048 65536 131072` with `NCMOE=22` and `24`. First a correction of the table above: the third
+column is the server's `timings.prompt_n`, i.e. the tokens *newly evaluated* in that request — `bench.py` sends exact-token
+prefixes with `cache_prompt: true`, so each row prefilled only the delta over the previous depth (the "131072" row really
+reached 131K: 66 564 new tokens on top of the 64.5K already cached). Nothing was capped; the earlier "cliff past 50K" reading
+and the "75 t/s marginal" arithmetic were wrong.
+
+| k (expert layers on the CPU) | 2 048: pp / tg | 65 536 (new tokens 64.5K, depth 1–64K) | 131 072 (new 66.5K, depth 64–131K) |
+|---|---|---|---|
+| **20** (frozen; 13 Sep, 16 384 row in between) | **831 / 32.5** | 412 (50 180 new, depth 15–65K) / 26.6 | **195 / 22.9** |
+| 22 (`q4cpu22-hd2`, VRAM ≈ 14.4 GiB) | 779 / 23.8 ‡ | 449 / 25.9 | 200 / 22.8 |
+| 24 (`q4cpu24-hd2`, VRAM ≈ 13.8 GiB) | 721 / 24.4 ‡ | 401 / 26.1 | 193 / 16.9 ‡ |
+
+- **VRAM headroom changes nothing at depth**: 64–131K prefill runs at 193–200 t/s for k = 20, 22 and 24 alike, and 1–64K at
+  401–449. The pp decline with depth (831 → ~430 → ~195) is the attention cost of a 64–131K context (T0's all-VRAM model
+  shows the same shape: 1 362 t/s at 2K, 591 t/s for a cold 0–64K prompt, 252–406 t/s for small batches at 80–130K,
+  results-t0.md) plus the fixed ~35–40 % partial-offload penalty — not a memory cliff. Moving more layers to the CPU only
+  costs shallow-depth pp (−6 % / −13 %). **`NCMOE=20` stays frozen.**
+- ‡ The tg cells marked ‡ are **not trustworthy**: 23.8 / 24.4 t/s at 2K (and 16.9 at 131K for k=24) where every other
+  measurement of this model on the same day says ~31–32 (`t1-final` codebench 31.35 at 08:02, k=20; the *pinned* k=22 row of
+  07:02 gave 11.69, which with the §6.1 factor extrapolates to ≈ 32 healthy). The server's own timings show the same 2.6 s
+  for 64 tokens, so it is not a measurement artefact of `bench.py` — something on the CPU side ran slower during these two
+  10-minute windows (no watchdog cap, no AC event, PCH 70 °C; `powerd` is active and the 5-s telemetry cannot resolve a
+  3-second generation phase). A control row (k=20 through `bench.py` on the same machine state) was queued but the GPU pin of
+  08:36:59 (drop #5, §6.2) pre-empted it; the k=22/24 pp columns are unaffected and answer the headroom question on their own.
 
 ### 2.4 E2E rust/go/c/asm (chain 2, `e2e-all.sh qwen35b-q4`, started 13 Sep 12:52 after pin check 61.19 t/s)
 
@@ -389,6 +422,9 @@ as a likely FAIL-infra reclassification; T0 stays frozen, the winner was decided
 Re-run of the same ladder: 0 pinned-memory warnings, every k loads (§5). Rule for T2: keep the ARC cap (lower it to 8 GiB
 if a T2 model needs the room) and check `top` "Wired" before any fit — pinned failures are an infra symptom, never a model
 one.
+*Update 14 Sep:* a second, independent cause of the same warning is the driver's size windows `[n·256 MiB, +≈14 MiB)`
+(results-t2.md §2.3; fixed by `patches/0002-vulkan-pad-host-alloc-windows.patch` in both builds) — with the ARC capped and
+the padding in place, a `Failed to allocate pinned memory` warning would be a new phenomenon and must be root-caused again.
 
 **Prior art on tuxi (looked up 13 Sep 07:25 at the owner's request; `/data/ai/freebsd-local-agent-poc.md` Incidents 3–7,
 scripts in `/data/ai/`, same copies on asgard):** the 6 Sep 2026 ARC saga on the 61.75 GiB tuxi was the *double copy* problem —
@@ -644,10 +680,16 @@ THREADS_BATCH=16` (`MODEL_CACHE_RAM=8192`, thinking on) — the §2.2 sweep winn
 22.9 t/s / 195 t/s at 66.5K depth on a healthy GPU (§2.3). Nothing is deleted: `kat-q4` and `qwen35b-q8` stay on disk
 (owner's instruction; `kat-q4` remains the natural second candidate for the small-task speed follow-up).
 
-**What happens next (owner):** restart asgard (cold power-off releases the GPU pin, §3.1.2), then the small-task
-output-t/s follow-up on the best candidates — `qwen35b` (T0), `qwen35b-q4` (T1), optionally `kat-q4` — e.g.
-`sweep.sh qwen35b-q4 "cpu20-final=none;;NCMOE=20"` (two real coding prompts, aggregate tg) or a short `e2e-test.sh` rust
-run; T2 (`flashnext`, `qwen122b`, `qwen122b-iq4`) follows the same quality-first rule (results-t2.md).
+*Update 14 Sep 11:48 (owner):* with the verdict final and `kat-q4`'s small-task speed follow-up done (§6.3, 28.73 t/s), the
+owner asked to remove the T1 non-winners: `Kwaipilot_KAT-Coder-V2.5-Dev-Q4_K_L.gguf` (20.3 GiB) and `Qwen3.6-35B-A3B-Q8_0.gguf`
+(34.4 GiB) were deleted (305 → 250 GB used on `zroot/data/local-ai`), their `models.sh` entries dropped (settings stay in git
+history and in §4–§5 above; the `fast|t1` header line of models.sh now records the frozen knobs instead of "not frozen yet"),
+and the `kat-q4|qwen35b-q8` mentions in the `qwen.sh` / `llamactl.sh` / `serve.sh` headers were replaced by the T2 candidates.
+The disk holds the T0 winner, the T1 winner and the three T2 files only.
+
+**What happened next:** the owner cold-rebooted asgard 07:44 (releases the GPU pin, §3.1.2); the small-task output-t/s
+follow-up on the best candidates is in **§6.3** (`t0-final` 60.55, `t1-final` 31.35, `kat-final` 28.73 t/s — all back at
+their healthy values); T2 (`flashnext`, `qwen122b`, `qwen122b-iq4`) follows the same quality-first rule (results-t2.md).
 
 ### 6.1 GPU-pin calibration — how much slower the pinned regime is, and how to extrapolate (14 Sep 07:12–07:37, `t1-chain3b.sh` step 1)
 
@@ -664,7 +706,7 @@ and `pin-calib.log`:
 | `qwen35b-q4` `cpu20` (20 expert layers in RAM, 8 thr; 3 692 tokens) | 31.56 (`cpu20-ac2`, 13 Sep) | 10.98 (`cpu20-pin`) | **2.87×** |
 | `qwen35b-q8` `cpu29` (29 layers in RAM, 8 thr; 3 767 tokens) | 21.45 (`cpu29`, 13 Sep) | 7.61 (`cpu29-pin`) | **2.82×** |
 | `kat-q4` `cpu19` THREADS=16 (19 layers in RAM; 633 tokens) | 27.7 (A/B mean, 14 Sep 06:53–07:00) | 13.35 (`cpu19-t16-pin`) | 2.08× |
-| `qwen35b` all VRAM, `bench.py` depth 2048 / 16384 (pp, tg) | *not measured healthy yet* | pp 294 / 272, tg 15.95 / 13.57 (`vram-pin`) | — (free after the restart: `GEN=64 bench.py vram-healthy 2048 16384`) |
+| `qwen35b` all VRAM, `bench.py` depth 2048 / 16384 (**pp**, tg) | **pp 1362 / 1166**, tg 61.5 / 55.7 (`vram-healthy`, 14 Sep 07:52 after the cold reboot) | pp 294 / 272, tg 15.95 / 13.57 (`vram-pin`) | **pp 4.6× / 4.3×**, tg 3.9× / 4.1× |
 
 Reading: the pin only slows the GPU-resident part of a token (attention, dense layers, the VRAM-resident experts); the
 RAM-resident experts run on the CPU at full speed. Splitting the per-token time with the all-VRAM 3.75× as the GPU
@@ -676,6 +718,140 @@ factor is the least reliable of the three — treat it as a lower bound.
 **Rule of thumb for extrapolating a pinned number to a healthy GPU:** all-VRAM configs × **3.75**; T1-class configs
 (about half the expert layers in RAM) × **2.8–2.9**; T2-class configs (all experts in RAM, only attention + dense on
 the GPU) will be *less* than that — probably 1.3–1.8×, to be calibrated with one pinned/healthy pair when the pin is
-gone. Prompt processing was not calibrated (the k=22 headroom run gave one pinned point, `q4cpu22-hd,2048: pp 257`,
-against 831 healthy for k=20 = 3.2×, and `vram-pin` has no healthy pair yet). None of this touches the quality ranking
+gone. Prompt processing suffers *more* than generation under the pin: **×4.3–4.6 for all-VRAM prefill** (compute-bound, follows the
+SM lock harder than the bandwidth-bound tg), ×3.2 for the T1-class `q4cpu22-hd,2048: pp 257` vs 831 healthy at k=20. None of this touches the quality ranking
 in §6, which is what the T1 choice rests on.
+
+### 6.2 What causes the GPU pins, and how the campaign now works around them (14 Sep 07:50, after the 4th event)
+
+**Mechanism (evidence-based, not vendor-confirmed):**
+
+1. *Trigger — an AC-adapter dropout.* Four `acpi_acad0: Off Line` events in the campaign; **every one of them left the Quadro
+   locked at 1035 MHz / P2 with the "Idle" clock-event reason** (16.3 t/s on the all-VRAM reference instead of 60–63).
+2. *Where the lock lives — the Dell EC, not the driver or the GPU.* Replugging the adapter, `nvidia-smi`, a driver reload
+   (`kldunload/kldload nvidia-modeset`, 13 Sep 11:33), suspend (`zzz`) and a **warm reboot** (which resets the GPU) all left it
+   pinned; only a **cold power-off with the adapter unplugged and a 30 s power-button hold** — the procedure that resets the
+   embedded controller — released it (13 Sep 10:04, 11:43; 14 Sep 07:44). On AC loss the EC puts the dGPU into its battery
+   power budget; on FreeBSD nothing renegotiates it when the adapter returns (on Windows the NVIDIA platform-power
+   handshake does that), so the EC keeps the cap until it is reset.
+3. *What makes the adapter drop — a load step, not heat and not average power.* In the 5-s telemetry each dropout sits exactly
+   on a GPU jump from idle to full power: 12 Sep 23:10:41 (`gpu=124.6 W` in the sample of the drop, GPU idle 10 s before),
+   13 Sep 10:58:07 (one second after a sweep config came UP = the warm-up request), 14 Sep 07:02:01 (the depth bench's first
+   prefill after a model load). CPU package power at those moments was 13–30 W (one core at 4.4 GHz tokenising; RAPL
+   PL1/PL2 35/45 W is set but "ignored by this PCU"). The same EC also brakes the GPU through its external THERM pin during
+   long prefills (`0x40`/`0x08` HW-slowdown bits at GPU 67–75 °C — the `0x80` power-brake bit never appears) and clamps
+   the CPU to 900 MHz whenever the GPU works — a tight platform power budget. The two freezes (§5.3) sit in the same
+   regime: 1-s GPU power averages of 122–141 W against the 110 W limit, i.e. transients well beyond the nominal TGP.
+   Everything fits an adapter/jack that cannot take the transient: a 180 W (or unrecognised) adapter, a degraded 240 W one,
+   or a worn barrel contact whose voltage sags under a 10 A step and makes the EC declare "Off Line". **Owner check
+   requested:** the adapter label (Dell 240 W = 19.5 V ⎓ 12.3 A; 180 W = 9.23 A), the BIOS "AC adapter type", and whether
+   the plug/jack is warm or loose after a run.
+
+**Avoidance measures in place:**
+
+- `start.sh` **soft-start** (14 Sep 07:52): after `/health` every server gets a 1 → 64 → 512 → 2048-token ramp (4 generated
+  tokens each, 1 s apart, ~4–15 s) before any real request, so the first prefill never lands on an idle GPU as one step.
+  `SOFTSTART=0` disables it. First test on `qwen35b`: 4/4 requests in 4 s.
+- Every chain step is bracketed by an **AC-drop detector** (`acpi_acad0: Off Line` count) and a pin check: a drop marks the
+  step's numbers suspect, a pinned GPU stops the chain — no more mixed-regime rows.
+- Pinned numbers are still usable: the pin is reproducible and §6.1 gives the factors (×3.75–3.9 tg / ×4.5 pp all-VRAM,
+  ×2.8–2.9 tg T1-class); quality results (E2E grades) are regime-independent.
+- Not done, owner's call: lowering the watchdog's `MAX_RATIO` (53 → 35–40) would trim the CPU's part of the transients
+  (~10–20 W) and heat; the CPU was not the dominant term in any dropout, so it is a minor lever compared with the adapter.
+  No software lever exists for the GPU side (`nvidia-smi -pl/-lgc/-pm` are unsupported/destructive on this driver, §3.1).
+
+**Amendment 14 Sep 08:37–08:55 — the 5th event, and the soft-start turned out to be a no-op.**
+
+- **Drop #5:** `acpi_acad0: Off Line` **08:36:59** → `On Line` 08:37:09 (10 s), seven seconds after the flashnext `cpuall`
+  server came UP in chain 4 step 3b, i.e. on its very first prefill (telemetry 08:36:56: GPU 1395 MHz, 70 W, `0x04`; CPU
+  package 13–25 W). The GPU has been pinned since — the usual signature, chain 4's end pin check 08:59:38: **16.24 t/s, 1035 MHz / P2 /
+  mem 6801** (idle it now parks in P3 / mem 5000) — so the flashnext speed row of that step is FAIL-infra (results-t2.md
+  §2.2) and chain 4 stopped at its pin check as designed (`exit 2`). Fifth cold power-off pending (owner).
+- **The soft-start never did anything.** Its four ramp requests carried no API key, the server answered `401 unauthorized:
+  Invalid API Key` (visible in `serve.out`), and the loop counted the failed curls as "4/4 in 4 s" — so the "first test on
+  qwen35b" above and the finals of §6.3 ran *without* a ramp (which is also why the finals showed "no cost"). Fixed 08:50:
+  `start.sh` now reads `key.secret`, uses `curl -sf` (only 2xx counts) and ramps 1 → 16 → 64 → 128 → 256 → 512 → 1024 →
+  2048 tokens 2 s apart, printing `soft-start: N/8 ok`. Whether a ramp can help at all is doubtful: any prefill ≥ 32 tokens
+  already runs the GPU at full utilisation, so the smallest realistic step is the whole step. Kept because it is free.
+- **Sharper pattern:** of the five `Off Line` events one was the owner's replug (13 Sep 06:47:55); **all four spontaneous
+  drops sit on a *partial-offload prefill*** — 12 Sep 23:10:41 q4 k=20 depth bench, 13 Sep 10:58:07 q8 k=29 warm-up, 14 Sep
+  07:02:00 q4 k=22 first prefill, 14 Sep 08:36:59 flashnext `NCMOE=all` first prefill. The all-VRAM T0 model at 100–124 W GPU
+  power ran many hours of finals/sweeps/E2E without a single drop, at *higher* GPU power than drop #5 (70 W). The
+  partial-offload prefill is the moment when the GPU, PCIe (expert weights streamed from host RAM at ~10 GB/s) and the DDR4
+  side all step up together — the platform-wide current step, not the GPU alone, is what the adapter/jack fails on. This
+  narrows the owner check above: a 240 W adapter (or a fresh jack) is the cheapest next experiment; on the software side
+  nothing ramps a prefill gently, so the campaign plans for pins instead (chains carry on pinned for quality, `-pin`-labelled
+  speed rows, see results-t2.md §2.2).
+
+**Amendment 14 Sep 11:53–12:20 — drop #6 on a fresh boot, and two software levers finally worth trying.**
+
+- **Drop #6:** `acpi_acad0: Off Line` **11:53:16** → `On Line` 11:53:20 (4 s), three minutes after the owner's cold power-on,
+  exactly at "UP" of the first load (`qwen122b NCMOE=all`, the patch-0002 memory-logger check) — i.e. at llama-server's
+  **built-in warm-up**, which for a MoE model decodes with *all* experts active (`llama_set_warmup`): ~70 GiB of expert
+  weights streamed over PCIe in one go on an idle, freshly unpinned GPU — the largest step the platform can produce, and it
+  happens *before* start.sh's soft-start can ramp anything. The GPU was pinned again (chain 1's pin check 11:57: 16.23 t/s,
+  1035 MHz / P2 / mem 6801). Sixth spontaneous drop, sixth first-partial-offload step; the pinned regime again produced
+  hours of rows without a drop. Whether cold power-off #6 had released the pin is unknowable — the drop came first.
+- **Lever 1 — `--no-warmup`** (serve.sh, 12:10): skip the all-experts warm-up. Nothing is lost: the pinned host buffers are
+  filled at load (no lazy paging), the first request pays a few Vulkan pipeline compilations instead — absorbed by the ramp.
+  Verified: the 12:15 load went threadpool-init → "model loaded" with no warm-up line.
+- **Lever 2 — a gap-free ramp immediately before the first real request** (`ramp.py`, 12:10): 1 → 4 → 16 → 64 → 256 → 1024
+  → 4096 prompt tokens (4 generated each, prompt cache off) back-to-back, so the GPU boost/power controller is already
+  engaged and the platform current climbs in ≤ 4× steps instead of one cliff. Called by start.sh (replaces the 2-s-apart
+  loop — whose ramp was followed by minutes of settle-wait idling, so the GPU was cold again at the real first prefill), by
+  bench.py / codebench.py right after `settle()`, and by e2e-test.sh (`RAMP_MAX=16384`) before qwen-code's ~23K first
+  prompt. `NO_RAMP=1` skips it. Functional test, pinned (12:15): `qwen122b k=47 MTP` UP 54 s, ramp 7/7 in 52 s, bench row
+  fine, no drop. Whether a staircase helps depends on what the adapter/EC trips on — di/dt (then it should) or the absolute
+  level (then only a 240 W adapter / jack fix helps); **cold power-off #7 (12:2x) is the experiment.**
+- Still open, owner's call: capping the CPU turbo during T2 work (watchdog `MAX_RATIO` 53 → 35–40, or a `dev.cpu.0.freq`
+  limit) would trim ~10–20 W of the transient; and the adapter label / BIOS "adapter type" / jack check from the list above.
+
+**Amendment 14 Sep 12:16–12:30 — drop #7 four seconds into the ramp: the adapter trips on the level, not the slope.**
+
+- Cold power-off #7 (adapter unplugged, 30 s button hold) **did release the pin**: chain 1's pin check 12:18:33 on the all-VRAM
+  T0 model — **61.21 t/s, SM 1905 MHz, P0, HEALTHY**, including a 1 → 4096-token ramp at 1755 MHz / 100 W without a drop.
+- The first partial-offload server (`qwen122b NCMOE=47 SPEC=draft-mtp`, `--no-warmup`) came UP 12:21:58; `ramp.py` started
+  12:21:59; **`acpi_acad0: Off Line` 12:22:03** → On Line 12:22:11 (8 s) — four seconds in, i.e. at a 64- or 256-token step
+  (the 1/4/16-token steps had passed). GPU pinned again (P8 idle → 1035 MHz cap under load). Seventh spontaneous drop, seventh
+  first-partial-offload prefill; no drop ever in the pinned regime or on the all-VRAM model.
+- **Reading:** a ≤ 256-token prefill already streams (nearly) every expert of every layer over PCIe at full rate while the GPU
+  sits at boost — the platform current reaches its full level within the first step, whatever the batch. The adapter (or the
+  jack) trips on that *level*; a staircase cannot lower it, and the 4–10 s "Off Line" is the signature of an adapter's
+  over-current hiccup. The all-VRAM model at 100–125 W GPU power never crosses the threshold; the partial-offload path adds
+  the PCIe root complex, four DIMMs at full bandwidth and the GPU's DMA engines — evidently just enough.
+- **Consequence for the campaign:** with this adapter/jack **T2 (partial-offload) models will always run pinned** — the first
+  prefill pins the GPU within seconds of every healthy boot. The pinned numbers are therefore T2's *real operating regime*,
+  not FAIL-infra; the chains now force `-pin` labels and run every E2E phase pinned (quality is regime-independent; wall
+  times are pinned-regime and say so). `--no-warmup` and `ramp.py` stay (free, and they remove the two largest steps), but
+  they are not a fix. Cold power-offs are no longer requested for T2 work.
+- **The fix is hardware (owner):** the adapter label (Dell 240 W = 19.5 V ⎓ 12.3 A; 180 W = 9.23 A; 130 W = 6.7 A), the BIOS
+  "AC adapter type / wattage" line, a known-good 240 W adapter, and the barrel jack (warm / loose after a run). A software-side
+  half-measure that remains untested is capping the CPU turbo during T2 work (watchdog `MAX_RATIO` 53 → 35–40) — it trims
+  the transient by ~10–20 W, which may or may not be the margin.
+
+### 6.3 Final small-task output t/s at the frozen settings — post-reboot, healthy GPU, soft-start on (14 Sep 07:55–08:07, `t1-chain4.sh` step 1)
+
+Owner's follow-up from §6: measure the best candidates once more with a small real task after the cold reboot. Same
+codebench pair (2 coding prompts, greedy, 2 048 tokens) as every sweep, so the rows compare 1:1 with §2.2 / §4.2 and
+results-t0.md; pin check before the step `pincheck-chain4-start` 63.27 t/s (SM 1920, mem 7000) = HEALTHY, AC-drop counter
+unchanged across the step (no dropout), telemetry running.
+
+| label | model / profile | tokens | wall s | **tg t/s** | previous healthy rows (same prompts) | delta |
+|---|---|---|---|---|---|---|
+| `t0-final` | `qwen35b` UD-IQ2_M, all VRAM (`vram|t0`) | 3 957 | 65.3 | **60.55** | `none` 58.67 (12 Sep), pin checks 61–64 (bench.py, 64-token prompt) | +3 % |
+| `t1-final` | `qwen35b-q4` UD-Q4_K_XL, `NCMOE=20`, 8 thr (`fast|t1`) | 3 692 | 117.8 | **31.35** | `cpu20` 30.69, `cpu20-ac2` 31.56, `cpu20-t16` 30.22 (12–13 Sep) | ±1 % |
+| `kat-final` | `kat-q4` Q4_K_L, `NCMOE=19`, 16 thr | 633 | 22.0 | **28.73** | `cpu19-t16c/d` 27.87 / 27.60 (14 Sep 06:50, §4.2) | +3–4 % |
+
+Read-out:
+
+- The cold reboot **fully restored** the box: every frozen profile is back at (slightly above) its best healthy number; the
+  small +1–4 % is the cooler, freshly booted machine (PCH 67–78 °C, no ARC pressure yet), not a real change.
+- The **soft-start** (§6.2) costs nothing measurable on output t/s — it runs once per server start, before the prompts
+  — and this is the first full step since the 4th pin without an AC dropout (n = 1, not proof).
+- Winner economics for T1 on the small task: `qwen35b-q4` 31.4 t/s vs `kat-q4` 28.7 t/s (KAT's tokens are ~6× fewer
+  because it answers tersely, so its wall time per prompt is much lower — but the quality verdict in §6 stands); the
+  all-VRAM T0 model is 1.9× faster than T1 on the same prompts (§6 table: T0 16/19 with one functional bug vs T1 14/19
+  with none — the T1 winner buys correctness, not speed).
+- Pin factors from §6.1 re-checked against these rows: `t1-final` 31.35 / pinned `cpu20-pin` 10.98 = **×2.86** (§6.1 said
+  ×2.87); `t0-final` 60.55 / 16.30 = **×3.71** (§6.1 ×3.75); `kat-final` 28.73 / 13.35 = ×2.15 (§6.1 ×2.08, KAT's short
+  answers make it a lower bound). The calibration holds.

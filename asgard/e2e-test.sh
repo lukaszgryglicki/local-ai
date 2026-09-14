@@ -37,6 +37,7 @@ else
   mkdir -p "$W"; cd "$W" || exit 1
 fi
 "$d/health.sh" > health.txt 2>&1 || { cat health.txt; echo "server not healthy - aborting"; exit 1; }
+RAMP_MAX=${RAMP_MAX:-16384} python3 "$d/ramp.py" 2>&1 | tee ramp.txt   # gap-free load ramp before qwen-code's ~23K first prompt (asgard/ramp.py; AC-drop avoidance, results-t1.md §6.2)
 [ -n "$QARGS" ] || { STDIN=$(e2e_prepare "$T" "$W") || { echo "task preparation failed"; exit 1; }; }
 [ -n "$STDIN" ] || STDIN=/dev/null
 off=$(stat -f %z "$LOG" 2>/dev/null || echo 0); ino=$(stat -f %i "$LOG" 2>/dev/null || echo 0); slices="$LOG:$off"

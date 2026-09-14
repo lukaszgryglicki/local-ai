@@ -26,3 +26,19 @@ while :; do
 done
 echo "UP in $(( $(date +%s) - t0 )) s (pid $(cat "$PID")) | VRAM: $(nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader) | model=${1:-qwen35b} NP=${NP:-1} CTX=${CTX:-$((262144 * ${NP:-1}))} THREADS=${THREADS:-default}/${THREADS_BATCH:-16} NCMOE=${NCMOE:-default} SPEC=${SPEC:-default}"
 grep -E "KV self size|KV size|compute buffer size|model buffer size|CPU_Mapped model buffer|Vulkan0 model buffer|Vulkan0 KV|n_ctx_seq|n_ctx_per_seq|slots|spec|draft|warning|error" | grep -v "^$" | cut -c1-160 | head -14
+# soft-start (14 Sep 2026): all four AC-adapter dropouts of the campaign happened when the GPU jumped from idle to full
+# power within milliseconds (first prefill/warm-up after a load: 12 Sep 23:10:41 at a 124.6 W spike, 13 Sep 10:58:07 one
+# second after UP, 14 Sep 07:02:01 at the first depth-bench prefill) and every dropout left the GPU pinned until a cold
+# power-off (results-t1.md 3.1, 6.1). Ramp the load in steps instead of one step: 1 -> 16 -> ... -> 2048 prompt tokens,
+# 4 generated tokens each, 2 s apart (~20-40 s). SOFTSTART=0 skips it. This does not replace the adapter/jack check.
+# Drop #5 (14 Sep 08:36:59) showed every dropout sits on a *partial-offload* prefill (expert weights streamed over PCIe to
+# the GPU + CPU/RAM busy); the all-VRAM T0 model never dropped at the same GPU power - the ramp can only soften the step.
+if [ "${SOFTSTART:-1}" != 0 ]; then
+  # 14 Sep 08:50 fix: the first version sent no API key -> every ramp request was a 401 and the "4/4" was a no-op.
+  # 14 Sep 12:10 (drop #6 hit the server's built-in warm-up right at UP): serve.sh now runs --no-warmup, so this ramp IS the
+  # first GPU work; it is ramp.py (1 -> 4 -> 16 -> ... -> RAMP_MAX tokens back-to-back, no gaps, so the GPU boost controller is
+  # engaged before the big steps). bench.py/codebench.py/e2e-test.sh call the same ramp immediately before their first request,
+  # because a ramp minutes earlier (settle wait in between) leaves an idle GPU again.
+  t1=$(date +%s); out=$(RAMP_MAX=${RAMP_MAX:-4096} python3 "$d/ramp.py" 2>&1 | tail -1)
+  echo "soft-start: ${out#ramp: } ($(( $(date +%s) - t1 )) s)"
+fi

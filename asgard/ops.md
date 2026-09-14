@@ -340,6 +340,102 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   §6.1: ×3.75 all-VRAM, ×2.8–2.9 T1-class, T2-class to be calibrated. Server down, nothing running but telemetry + watchdog;
   **asgard is ready for the owner's restart** (cold power-off releases the pin). Not run: q4 depth k=20/22/24 pinned, flashnext
   fits/sweep (`t1-chain3b.sh` steps 2–3), all T2 work — resume after the restart per the quality-first rule.
+- 14 Sep 07:44 — **owner cold reboot** → GPU healthy again: pin check `pin-0750-postreboot` **63.01 t/s, SM 1935, P0, mem 7000**.
+  Telemetry restarted (it is not in rc; the watchdog is). Healthy half of the pin calibration: `vram-healthy` pp 1362/1166,
+  tg 61.5/55.7 at 2048/16384 → pinned/healthy ×4.5 pp, ×3.9–4.1 tg (results-t1.md §6.1).
+- 14 Sep 07:50 — **pin root-cause picture written (results-t1.md §6.2)**: dropout → EC latches the dGPU battery budget → only an
+  EC reset clears it; the dropouts sit on idle→full GPU load steps (124.6 W sample 12 Sep 23:10:41; first prefill after a load
+  13 Sep 10:58:07 and 14 Sep 07:02:01), CPU pkg only 13–30 W then → adapter/jack transient capacity is the suspect (owner:
+  check label 240 W = 12.3 A vs 180 W, BIOS adapter type, warm/loose plug). Mitigation: `start.sh` **soft-start ramp**
+  (1/64/512/2048 tokens, `SOFTSTART=0` to skip) + AC-drop detector/pin check around every chain step.
+- 14 Sep 07:54 — `t1-chain4.sh` started: pin check → **finals** (`t0-final` qwen35b, `t1-final` qwen35b-q4, `kat-final` kat-q4:
+  codebench output t/s at the frozen settings) → q4 depth headroom k=22/24 (healthy, `-hd2`) → flashnext fits k=44–47 + sweep
+  cpuall/cpu45 → end pin check.
+
+- 14 Sep 08:08 — **finals done (results-t1.md §6.3)**: `t0-final` qwen35b **60.55 t/s**, `t1-final` qwen35b-q4 **31.35**, `kat-final`
+  kat-q4 **28.73** — every frozen profile back at (+1–4 %) its best healthy 12–13 Sep value, no AC dropout during the step, soft-start
+  free of cost. Pin factors re-confirmed on real rows (×3.71 all-VRAM, ×2.86 T1-class). Chain 4 continues with the depth headroom step.
+- 14 Sep 08:26 — **q4 depth headroom done (results-t1.md §2.3, end)**: k=22/24 give the same 193–200 t/s pp for the 64–131K range as k=20
+  (and 401–449 for 1–64K) — VRAM headroom changes nothing at depth, the "cliff" was a misreading of `bench.py`'s `prompt_n`
+  (newly evaluated tokens, prompt cache reuses the prefix; the 131072 row really is a 131K context). `NCMOE=20` stays frozen. The 2K tg
+  cells of this run (23.8/24.4 vs 31–32 everywhere else that morning) are flagged as untrustworthy; the k=20 control row was pre-empted by the pin.
+- 14 Sep 08:33 — **flashnext fit ladder (results-t2.md §2.2)**: k=44/45 fail (`failed to allocate Vulkan0 buffer of size 4212277264` — a 4.2 GB
+  compute buffer), k=46 UP 15 465 MiB, k=47 UP 13 926 MiB, all = 12 391 → ≈ 1.5 GiB per expert layer; chains use **k=47**.
+- 14 Sep 08:37 — **AC drop #5 → GPU pinned again**: `acpi_acad0: Off Line` 08:36:59 → `On Line` 08:37:09, 7 s after the flashnext `cpuall`
+  server came UP (its first prefill, GPU 70 W, CPU pkg 13–25 W). The pinned `cpuall` codebench row (pp 6–9, **tg 2.76 t/s**) is FAIL-infra
+  for speed and kept as a lower bound; `cpu45` START_FAILED as expected. Chain 4 end pin check 08:59:38 **16.24 t/s / 1035 MHz / P2 → PINNED**,
+  chain 4 stopped (`exit 2`). All four spontaneous drops sit on a partial-offload prefill (results-t1.md §6.2 amendment). **Owner: 5th cold
+  power-off needed for healthy T2 speed numbers; adapter/jack check requested.**
+- 14 Sep 08:50 — **soft-start was a no-op** (its curls had no API key → `401 Invalid API Key` × 4 in serve.out, counted as "4/4"): `start.sh`
+  fixed — key from `key.secret`, `curl -sf`, 8-step ramp 1…2048 tokens 2 s apart, prints `soft-start: N/8`. First live run 08:59: `8/8 in 33 s`.
+- 14 Sep 08:56 — **T2 chains re-planned for the pinned regime and deployed** (`~/local-ai-runs/t2-chain1.sh`, `t2-chain2.sh` v2): a pinned GPU
+  no longer stops them — bench rows get a `-pin` suffix, codebench is skipped while pinned, E2E phase A (rust+go) runs pinned with
+  `E2E_NOTE="GPU PINNED"` (quality is regime-independent), phases B/C (c, asm) wait for a healthy GPU (`exit 3`; restart with `PHASES=BC`).
+  Chain 1: qwen122b / qwen122b-iq4 fit ladders → `bestk` → bench sweeps (none / mtp / t16) → codebench when healthy.
+- 14 Sep 09:00–09:07 — **qwen122b would not load (FAIL-infra)**: `t2-chain1.sh` v2 started 09:00:26 pinned (16.20 t/s, continues with
+  `-pin` labels); `fit.sh qwen122b all 47 45 44` — every k SERVER EXITED after 48–78 s: 73 × `Failed to allocate pinned memory` in
+  30 ms, then the KV-cache Vulkan0 allocation (952 MiB, 10 GiB free) fails. Same with the master build. Chains 1 + 2 and their
+  orphans (`fit.sh`, `start.sh`, server) killed 09:07 for the diagnosis.
+- 14 Sep 09:07–09:38 — **root cause = the driver's pinned-allocation size windows** (`-lv 5`, `GGML_VK_MEMORY_LOGGER=1`, stand-alone
+  Vulkan probe `/tmp/pinprobe`): qwen122b's first `Vulkan_Host` expert chunk is 773 MiB + 32 B, and the NVIDIA FreeBSD driver rejects
+  host-visible allocations in `[n·256 MiB, +≈14 MiB)` (256, 768, 772, 773, 3072, 4096 fail; 255, 780, 960, 2062, 3086, 4112 OK);
+  one rejection poisons every later allocation of the process (device-local included). `--no-host` loads (CPU + CPU_REPACK,
+  pp 39 / tg 2.3–2.7 pinned) — fallback only. `GGML_VK_ENABLE_MEMORY_PRIORITY=1` **segfaults inside `vkAllocateMemory`** at
+  257 / 520 MiB — never use it. results-t2.md §2.3.
+- 14 Sep 09:38–09:50 — **`patches/0002-vulkan-pad-host-alloc-windows.patch`**: `ggml_vk_create_buffer` pads host-visible sizes in
+  `[n·256 MiB, +16 MiB)` to `n·256 MiB + 24 MiB` (`GGML_VK_HOST_ALLOC_PAD=0` disables). Applied to both trees; `build-vulkan-2.sh` /
+  `build-vulkan-master.sh` now apply 0001 + 0002; master rebuilt 09:41 (40 s), v0.4.0 `build-vulkan-2` rebuilt 10:13 (24 min — that
+  tree's `ggml-vulkan.cpp` is pathological for clang, 1 556 s the first time too). Verified:
+  `qwen122b NCMOE=all` UP 56 s, 0 warnings, 68.7 GiB host + 11.6 GiB device, two chunks padded (773 → 792, 512 → 536 MiB);
+  `bench.py cpuall-qwen122b-pad-pin 4096` → **pp 83.2 / tg 3.54 t/s pinned** (`sweep-qwen122b.csv`).
+- 14 Sep 10:18–10:26 — T1 sanity on the rebuilt `build-vulkan-2`: `qwen35b-q4` final profile UP 21 s, 15 167 MiB (unchanged), one chunk
+  padded (512.76 → 536 MiB), pinned bench pp 96 / tg 11.48 t/s (= T1 pin factor). Window edges re-probed: [512, 524), [768, 782),
+  [1024, 1038), ±1–2 MiB jitter between runs. Chain 1 ladders trimmed to `qwen122b all 47 46 45`, `qwen122b-iq4 all 46 45 44`;
+  **chains 1 + 2 v2 restarted 10:26** (logs rotated to `t2-chain1.log.2`, `t2-chain2.log.1`).
+- 14 Sep 10:30–11:10 — **patch 0002 v2** (owner reminder: the T0 limit was "< 256 MiB" — accounted for by padding to the *middle* of the
+  256 MiB interval instead of +24 MiB): danger zone `[n·256 MiB, +32 MiB)` → `n·256 MiB + 128 MiB`; ≤ 128 MiB of RAM per affected
+  buffer, nothing in VRAM. Applied to both trees (v1 reversed with `git apply -R`), patch file regenerated; master rebuilt 10:34
+  (chain 1 was in the qwen122b fits on `build-vulkan-2`, no flashnext start for > 10 min); the v0.4.0 object compiled in the
+  background (34 min at nice 19 next to the benches) and linked at 11:10 in 10 s while chain 1's bench server was up (lld replaces the
+  .so atomically; the next chain server, 11:14, came UP in 54 s on the new build).
+- 14 Sep 10:28–11:00 — chain 1 v2 pinned (pin check 16.25 t/s): **fits clean, 0 pinned warnings** — `qwen122b` all 12 470 / 47 **15 250** /
+  46 ✗ (Vulkan0 alloc) / 45 ✗; `qwen122b-iq4` all 12 549 / 46 UP **16 007** (> 15 400 ceiling) / 45 ✗ / 44 ✗ → `bestk` 47 / all / 47.
+  `--n-cpu-moe k` leaves layers k…47 *and* the nextn layer 48 on the GPU: Q4_K_XL ≈ 1.39 GiB, IQ4_XS ≈ 1.15 GiB per expert layer —
+  so iq4 k=47 (≈ 14.9 GiB) fits but was not in the trimmed ladder; chain 2 got an addendum (fit + `cpu47-{mtp,none}` bench rows
+  before phase A, `bestk` then picks 47 for its E2E) and was redeployed 11:03 (kill → scp+mv → restart, still in its wait loop).
+  First pinned bench rows: `cpuall-mtp-pin` 64 → pp 10.3 / tg **4.66**, 4096 → pp 81.1 / tg **4.20** (MTP +19 % over `none` 3.54).
+- 14 Sep 11:00–11:47 — chain 1 pinned rows complete for both qwen122b files, then both chains stopped for the owner's cold power-off.
+  `qwen122b`: `cpuall-none-pin` 64 → pp 11.2 / tg 3.20, 4096 → 82.7 / 3.14; `cpu47-mtp-pin` 64 → 11.0 / **5.91**, 4096 → 82.3 / **5.60**.
+  `qwen122b-iq4`: `cpuall-mtp-pin` 9.7 / 3.78 and 75.8 / 4.08; `cpuall-none-pin` 11.1 / 2.27 and 78.4 / 2.31. No new `Failed to allocate
+  pinned` line in `serve.out` (746 historic). 11:47, the owner offered a restart: killed chain 1 (daemon `kill -KILL`, sh, sweep.sh,
+  server) before its flashnext rows (the 08:33 pinned codebench rows exist) and chain 2 in its wait loop; both logs got a STOPPED
+  line. Tables: results-t2.md §2.4.
+- 14 Sep 11:43–11:48 — **T1 non-winners removed (owner):** `kat-q4` + `qwen35b-q8` GGUFs deleted (55 GB), entries dropped from
+  `models.sh` (python patch; `sh -n` + `model_env` for t1 / qwen35b / qwen35b-q4 / flashnext / qwen122b / qwen122b-iq4 pass, `kat-q4`
+  → unknown model), `fast|t1` header line fixed (said "not frozen yet"), `best|t2` line, the `*)` message, and the header comments
+  of qwen.sh / llamactl.sh / serve.sh. results-t1.md §6 got the update paragraph. 11:48 `sudo shutdown -p now`.
+- 14 Sep 11:50–11:56 — **cold power-on, healthy restart.** Owner powered on 11:50; `vfs.zfs.arc.max` is now 2 GiB (`arc.min` 1 GiB) —
+  the owner's own /etc/sysctl.conf change, confirmed OK. Post-boot: AC on, 100 %, pools healthy, 250 GB used, no leftovers.
+  `GGML_VK_MEMORY_LOGGER=1 NCMOE=all ./start.sh qwen122b`: UP 57 s, 12 687 MiB, **11 host-visible buffers padded** — 512 MiB → 640,
+  536.3 MiB → 640, 272 MiB → 384 MiB = patch 0002 v2's `n·256 + 128 MiB` target confirmed at runtime; 746 pinned warnings unchanged.
+  Chain 1 redeployed as the *healthy pass* (step 1 = only the iq4 k=47 probe, step 2 best-k MTP row of each model first, extra
+  `cpu48-mtp` row = only the nextn block in VRAM, flashnext `cpu47-mtp-code` added to step 3); logs rotated (`t2-chain1.log.3`,
+  `t2-chain2.log.2`); chains 1 + 2 started 11:55 (chain 2 unchanged, waits for `T2_CHAIN1_DONE`).
+- 14 Sep 11:53–12:20 — **AC drop #6 (11:53:16–20) re-pinned the GPU 3 min after the cold power-on**, exactly at UP of my
+  memory-logger `qwen122b` load = llama-server's built-in all-experts warm-up; chain 1's 11:57 pin check: 16.23 t/s PINNED.
+  Chains stopped 12:03 after the iq4 k=47 probe (14 794 MiB UP). Levers: **`--no-warmup`** in serve.sh (verified: no warm-up
+  line in llama.log) and **`ramp.py`** (gap-free 1→4→…→4096-token ramp; start.sh's soft-start now calls it, bench.py /
+  codebench.py call it after `settle()`, e2e-test.sh with `RAMP_MAX=16384` before qwen-code) — results-t1.md §6.2 amendment.
+  Functional test pinned: `qwen122b k=47 MTP` UP 54 s, ramp 7/7 in 52 s, bench row 5.37 t/s, no drop. Then `sudo shutdown -p
+  now` for cold power-off #7 (owner: adapter unplugged + 30 s button hold).
+- 14 Sep 12:16–12:30 — **cold power-off #7 released the pin (12:18 pin check 61.21 t/s HEALTHY), AC drop #7 at 12:22:03 re-pinned
+  it 4 s into the first partial-offload ramp** (`qwen122b k=47 MTP`, ≤ 256-token step). 7/7 first partial-offload prefills trip the
+  adapter → level, not slope → **T2 always runs pinned with this adapter**; pinned rows = T2's operating regime (results-t1.md §6.2
+  amendment 12:16–12:30, results-t2.md §2.4 postscript). Killed both chains before any pinned row landed under a healthy label
+  (only two header lines in `sweep-qwen122b.csv`). Redeployed: chain 1 = pinned continuation (P=-pin forced; only `cpu48-mtp-pin`,
+  iq4 `cpu47-{mtp,none}-pin`, flashnext `cpu47-{mtp,none,t16}-pin`; no codebench), chain 2 = phases A/B/C pinned (exit-3 gate
+  removed) + phase D pinned codebench at each model's E2E config. Started 12:25 (logs rotated to `.5` / `.4`). No more cold
+  power-off requests for T2; the owner's adapter/jack check is the open item.
 
 ## 7. At the real end (when the research phase is over)
 

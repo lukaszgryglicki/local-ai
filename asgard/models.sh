@@ -8,6 +8,9 @@
 # T0 is FROZEN (13 Sep 2026): qwen35b is the `fastest-vram` profile and the default model of start.sh / serve.sh / qwen.sh /
 # llamactl.sh (results-t0.md §5, report-t0.md §8). The other T0 candidates (north 0/4, qwen9b 1/4, gemma 1/4) were removed
 # on 13 Sep 00:30 - GGUFs deleted, entries dropped from this file; their settings live in git history and report-t0.md.
+# T1 is FROZEN (14 Sep 2026 07:20): qwen35b-q4 is the `fast` profile (results-t1.md §6, quality-first). The other T1 candidates
+# (kat-q4 = KAT-Coder-V2.5-Dev Q4_K_L 20.3 GiB, qwen35b-q8 = Qwen3.6-35B-A3B Q8_0 34.4 GiB) were removed on 14 Sep 11:50 on the
+# owner's instruction - GGUFs deleted, entries dropped from this file; settings/results live in git history and results-t1.md §4-§6.
 # Files live in ../models/ (gitignored) on the zroot/data/local-ai dataset (compression=off,
 # primarycache=metadata, recordsize=128K - see readme "ZFS: why the model has its own dataset"; `all` from 11 Sep was reverted
 # 13 Sep 01:05 and vfs.zfs.arc.max=16 GiB went into /etc/sysctl.conf: an unlimited ARC starves the NVIDIA pinned host
@@ -20,8 +23,8 @@
 # IGPU_MOE/THREADS - only where the environment does not set them; plain models may set MODEL_THREADS the same way), so `./start.sh vram`, `./llamactl.sh start t0`,
 # `MODEL=fastest-vram ./qwen.sh` keep working unchanged when later tiers change the plain defaults of serve.sh/start.sh:
 #   vram | t0 | fastest-vram  -> qwen35b, SPEC=none NP=1 CTX=262144 NCMOE=0 IGPU_MOE=0 THREADS=8 THREADS_BATCH=16 (frozen 13 Sep 2026)
-#   fast | t1                 -> not frozen yet (T1 in progress, results-t1.md)
-#   best | t2                 -> not frozen yet (T2 not started)
+#   fast | t1                 -> qwen35b-q4, SPEC=none NP=1 CTX=262144 NCMOE=20 IGPU_MOE=0 THREADS=8 THREADS_BATCH=16 (frozen 14 Sep 2026, results-t1.md §6)
+#   best | t2                 -> not frozen yet (T2 in progress: flashnext / qwen122b / qwen122b-iq4, results-t2.md)
 model_env() {
   MODEL_PROFILE=
   case "$1" in
@@ -47,18 +50,6 @@ model_env() {
       MODEL_BYTES=22360456160 MODEL_SHA256=707a55a8a4397ecde44de0c499d3e68c1ad1d240d1da65826b4949d1043f4450
       MODEL_SPEC=none MODEL_CACHE_RAM=8192 MODEL_NCMOE=20 MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}'
       MODEL_TEMP=1.0 MODEL_TOP_P=0.95 MODEL_TOP_K=20 MODEL_MIN_P=0.0 ;;     # NCMOE=20 = fit ladder 12 Sep (15 144 MiB; k=18 UP but 500 on 1st decode)
-    kat-q4)  # T1b: KAT-Coder-V2.5-Dev = Qwen3.6-35B-A3B fine-tuned for agentic coding (Kwaipilot), Q4_K_L, no MTP head
-      MODEL_FILE=Kwaipilot_KAT-Coder-V2.5-Dev-Q4_K_L.gguf MODEL_ALIAS=kat-coder-v2.5 MODEL_TITLE='KAT-Coder-V2.5-Dev Q4_K_L'
-      MODEL_REPO=bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-GGUF MODEL_REV=d8f684f08d2950ea9d2db6a35ef7dada0707858b
-      MODEL_BYTES=21768894880 MODEL_SHA256=bb0441b81a7cac064ae2fc139e6d4d0ef53dbdc8916ba117605070b7c03e455e
-      MODEL_SPEC=none MODEL_CACHE_RAM=8192 MODEL_NCMOE=19 MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}' MODEL_THREADS=16   # THREADS=16: +5.5 % vs 8 in the settle-guarded A/B 14 Sep (27.9/27.6 vs 26.2/26.4 t/s; the 13 Sep 34.0 was an outlier) - results-t1.md §4.2; the Qwen files lose with 16, so per model
-      MODEL_TEMP=1.0 MODEL_TOP_P=0.95 MODEL_TOP_K=20 MODEL_MIN_P=0.0 ;;     # KAT card thinking mode: temp 1.0, top_p 0.95, top_k 20; NCMOE=19 = fit ladder 13 Sep (15 267 MiB after 1st request)
-    qwen35b-q8) # T1/T2 quality reference: Qwen3.6-35B-A3B Q8_0 (34.4 GiB), ~29 of 40 expert layers outside VRAM
-      MODEL_FILE=Qwen3.6-35B-A3B-Q8_0.gguf MODEL_ALIAS=qwen3.6-35b-a3b-q8 MODEL_TITLE='Qwen3.6-35B-A3B Q8_0'
-      MODEL_REPO=unsloth/Qwen3.6-35B-A3B-GGUF MODEL_REV=a483e9e6cbd595906af30beda3187c2663a1118c
-      MODEL_BYTES=36903140320 MODEL_SHA256=d1a395809f65a43a13ad119eb4e7acdef1ac6d68120f39902c8ab96e72794a59
-      MODEL_SPEC=none MODEL_CACHE_RAM=8192 MODEL_NCMOE=29 MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}'
-      MODEL_TEMP=1.0 MODEL_TOP_P=0.95 MODEL_TOP_K=20 MODEL_MIN_P=0.0 ;;     # NCMOE=29 fit-confirmed 13 Sep 01:04: k=27 fails, k=29 = 15 011 -> 15 064 MiB after a 4K request (results-t1.md §5.1)
     flashnext) # T2 "best" candidate: Qwen3.8-Flash-Next 125B-A6B (+51B n-gram table, MTP), UD-IQ4_XS, 3 shards = 87.3 GiB; needs llama.cpp >= b10889 (plan §4 T3 row)
       MODEL_DIR=UD-IQ4_XS MODEL_FILE=Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf MODEL_ALIAS=qwen3.8-flash-next MODEL_TITLE='Qwen3.8-Flash-Next UD-IQ4_XS'
       MODEL_REPO=unsloth/Qwen3.8-Flash-Next-GGUF MODEL_REV=38bb39ee97821de2c9009abb7e93950eec396e66
@@ -81,6 +72,6 @@ model_env() {
       MODEL_EXTRA='Qwen3.5-122B-A10B-UD-IQ4_XS-00002-of-00003.gguf:49754258240:5d414ef4dd2b8c73780bafa6b47deb5f5d70ecfa804a785f3b1d98a9084310de Qwen3.5-122B-A10B-UD-IQ4_XS-00003-of-00003.gguf:12162581376:d9ac8af93d3818980762fdfb18d4ff30415d37233acba156995bfb816819bcf9'
       MODEL_SPEC=draft-mtp,ngram-mod MODEL_CACHE_RAM=8192 MODEL_NCMOE=all MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}'
       MODEL_TEMP=1.0 MODEL_TOP_P=0.95 MODEL_TOP_K=20 MODEL_MIN_P=0.0 ;;
-    *) echo "unknown model '$1' (profiles: vram|t0|fastest-vram = qwen35b  fast|t1 = qwen35b-q4  T1 candidates: qwen35b-q4|kat-q4|qwen35b-q8  T2 candidates: flashnext|qwen122b|qwen122b-iq4)" >&2; return 1 ;;
+    *) echo "unknown model '$1' (profiles: vram|t0|fastest-vram = qwen35b  fast|t1 = qwen35b-q4 (T1 winner; kat-q4/qwen35b-q8 removed 14 Sep)  T2 candidates: flashnext|qwen122b|qwen122b-iq4)" >&2; return 1 ;;
   esac
 }
