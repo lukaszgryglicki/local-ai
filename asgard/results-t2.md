@@ -13,6 +13,8 @@ then pick the fastest mode per model, then the E2E coding tasks. Speed goal (out
 absolute floor **1 t/s** (below = unusable), ideal **> 3 t/s**. T3 (an even bigger model) only if the owner still wants it at
 the end.
 
+> **Live state:** `asgard/STATUS.md` (restart sheet, updated at every transition) — this file is the evidence log.
+
 ## 0. Candidates and downloads (queue started 06:55, one file at a time, ~8–10 MB/s on wlan0, all resumable)
 
 Files come from HF at a pinned revision, sharded (`-0000N-of-0000M.gguf`); llama-server opens shard 1 and finds the rest next
@@ -363,3 +365,60 @@ the *pinned continuation*: chain 1 adds only the missing rows (`cpu48-mtp-pin`, 
 `cpu47-{mtp,none,t16}-pin`), chain 2 runs E2E phases A/B/C pinned and a phase D pinned codebench per model (the report
 metric). Healthy T2 numbers need a hardware fix (240 W adapter / jack) first; the T1-class pin factor ×2.86 is the
 extrapolation until then.
+
+### 2.5 Complete pinned placement / spec / threads table — the T2 operating regime (14 Sep 12:25–13:22, `t2-chain1.sh` pinned continuation)
+
+All rows GPU pinned (1035 MHz / P2 under load, mem 6801 — the regime every T2 model lands in within seconds of a healthy boot, §2.4
+postscript 12:30). `bench.py`, GEN=256, values pp t/s / tg t/s; `~/local-ai-runs/sweep-*.csv`. `k` = `--n-cpu-moe`: expert blocks
+0…k−1 in RAM; `all` = 49/49 in RAM, k=48 = only the nextn/MTP block 48 in VRAM, k=47 = blocks 47 + 48 in VRAM (the `bestk`).
+
+| model (file) | k | spec | thr | depth 64 | depth 4096 | VRAM after load |
+|---|---|---|---|---|---|---|
+| `qwen122b` (UD-Q4_K_XL 73.3 GiB) | all | `draft-mtp,ngram-mod` | 8 | 10.3 / 4.66 | 81.1 / 4.20 | 12 470 |
+| `qwen122b` | all | none | 8 | 11.2 / 3.20 | 82.7 / 3.14 | 12 470 |
+| `qwen122b` | 48 | MTP | 8 | 11.2 / 4.76 | 81.8 / **5.43** | ≈ 13 9xx |
+| **`qwen122b`** | **47** | **MTP** | 8 | 11.0 / **5.91** | 82.3 / **5.60** | **15 250** (15 572 after a 4K request) |
+| `qwen122b-iq4` (UD-IQ4_XS 57.7 GiB) | all | MTP | 8 | 9.7 / 3.78 | 75.8 / 4.08 | 12 549 |
+| `qwen122b-iq4` | all | none | 8 | 11.1 / 2.27 | 78.4 / 2.31 | 12 549 |
+| **`qwen122b-iq4`** | **47** | **MTP** | 8 | 11.1 / **4.94** | 77.2 / **5.21** | **14 794** |
+| `qwen122b-iq4` | 47 | none | 8 | 10.0 / 2.45 | 80.1 / 2.43 | 14 794 |
+| `flashnext` (UD-IQ4_XS 87.3 GiB) | all | none (codebench, §2.2) | 8 | small tasks 2.76 | — | 12 391 |
+| `flashnext` | 47 | `draft-mtp` | 8 | START_FAILED — **the file has no MTP layers** (`context type MTP requested but model doesn't contain MTP layers`; not infra) | | |
+| `flashnext` | 47 | none | 8 | 13.3 / 2.69 | 74.6 / 2.50 | 13 926 |
+| **`flashnext`** | **47** | **none** | **16** | 12.9 / **3.32** | 78.6 / **2.83** | 13 926 |
+
+Readings (pinned; the healthy factor is unmeasurable with this adapter — T1-class ×2.86 is the extrapolation, i.e. ≈ 16 / 15 / 9 t/s
+for the three bold configs):
+
+1. **The nextn block is the k=47 gain.** k=48 (only block 48 in VRAM) already gives 5.43 t/s at depth 4096 vs 4.20 for `all` (+29 %);
+   adding block 47 brings 5.60 (+3 %). The MTP draft runs the nextn block for every draft token, so its experts in VRAM remove the
+   draft's RAM round-trip. **Rule for MTP models with experts in RAM: keep at least the nextn block on the GPU** (k ≤ 48), whatever k.
+   At depth 64 the picture is noisier (4.76 vs 4.66 vs 5.91) — the first-request artefact dominates short rows.
+2. **MTP is worth +34–46 % (Q4_K_XL) and +77–114 % (IQ4_XS)** over `none`; the IQ4 file gains more because its `none` path is slower.
+3. **IQ4_XS is not faster than Q4_K_XL here** at equal k and spec (5.21 vs 5.60 at 4096, 4.94 vs 5.91 at 64) despite 21 % fewer expert
+   bytes — the RAM-streaming path is not byte-bound in the pinned regime (PCIe/latency-bound); the Q4_K_XL file has better quality
+   odds, so the iq4 file needs a quality win in §3 to matter.
+4. **flashnext:** no MTP head in the UD-IQ4_XS file → `none` only; `THREADS=16` gives +23 % at depth 64 / +13 % at 4096 (the only T2
+   model that gains from 16 threads — its 51B n-gram table is a CPU-side lookup). Slowest of the three (2.8–3.3 t/s pinned).
+5. Prefill 75–83 t/s at depth 4096 for all three (GPU-streamed experts from pinned RAM); depth-64 pp 10–13 t/s is the cold first request.
+
+E2E configs chain 2 uses for §3 (`bestk` + `bestspec`): `qwen122b k=47 draft-mtp,ngram-mod`, `qwen122b-iq4 k=47 draft-mtp,ngram-mod`,
+`flashnext k=47 none` (THREADS stays 8 in the E2E — the t16 gain arrived after chain 2's config was fixed; noted for the freeze).
+Chain 1 ended 13:22 (`T2_CHAIN1_DONE`, end pin check 15.09 t/s PINNED); chain 2 phase A started 13:25.
+
+## 3. E2E coding tasks — quality first (`t2-chain2.sh`, 14 Sep 13:25 →, all runs GPU pinned ≈ 5 t/s)
+
+Same harness and verifiers as T0/T1 (`e2e-all.sh` → `e2e-test.sh` drives qwen-code headless against the running server; independent
+`verify-*.sh`; `scoreboard.py`). Configs: `qwen122b k=47 draft-mtp,ngram-mod`, `qwen122b-iq4 k=47 draft-mtp,ngram-mod`, `flashnext k=47
+none`. Wall times are **pinned-regime** (the T2 operating regime with this adapter, §2.4/§2.5); quality is regime-independent.
+Classification: **PASS-score** (all functional checks pass; a missed spec-only check is noted), **FAIL-task-score** (a functional check
+fails — the program is wrong), **FAIL-infra** (cut by cap/crash/outage — not a quality signal).
+
+### 3.1 Phase A — rust + go
+
+| model | task | wall | verdict | class | what happened |
+|---|---|---|---|---|---|
+| `qwen122b` k=47 MTP | rust | 1 012 s (17 min; 10 turns, 26K ctx, tg 3.8 t/s aggregate, 59.8 % draft acceptance) | 4/5 (build ✓ test ✓ signature ✓ nodeps ✓, **round-trips 15/18**) | **FAIL-task-score** | `main()` uses `read_line` → only the **first line** of stdin is reversed; the spec says "reads all of stdin, strips one trailing newline". Multi-line inputs (`ab\ncd\n` → got `ba`, want `dc\nba`) fail. `reverse()` itself is right (Unicode by chars, 4 unit tests incl. Polish). A spec-reading slip, the opposite of the T1 winner's spec-only miss (T1 q4: 18/18 round-trips, signature not `pub`). |
+| `qwen122b` k=47 MTP | go | 1 871 s (31 min; 12 turns, 36K ctx, tg 4.6 t/s) | 4/5 (build ✓ vet ✓ test ✓ nodeps ✓, **comparisons 46/47**) | **FAIL-task-score** | `bufio.NewScanner(os.Stdin)` line by line with the default 64 KiB token limit → the 6 MB single-line input fails with `token too long`, rc=1, empty output. Same bug as T1's `kat-q4`; the T1 winner used `io.ReadAll`. The spec says "reads all of standard input" — the same all-of-stdin slip as in its rust solution. Tokenising/counting/sorting/ties are all correct (46/47, 256-line test file). |
+| **`qwen122b-iq4`** k=47 MTP | rust | 984 s (16 min; 11 turns, 25K ctx, tg 3.6 t/s) | **PASS 5/5** (18/18 round-trips, `pub fn reverse`, 4 tests, no deps, no unsafe) | **PASS-score** | `io::stdin().read_to_string` + `strip_suffix('\n')` — reads all of stdin, exactly the spec. The first fully clean T2 result; same weights as `qwen122b`, different quantisation, different sampling path → the two files are *not* interchangeable on a single task (one sample each; see the caveat in §3.3). |
+| `qwen122b-iq4` k=47 MTP | go | running 14:48 → | | | |

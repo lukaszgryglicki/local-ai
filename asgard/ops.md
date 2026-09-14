@@ -29,6 +29,7 @@ touches it automatically". Everything llama-side lives in this repo (`/data/loca
 
 | file | role |
 |---|---|
+| **`asgard/STATUS.md`** | **live restart sheet** (14 Sep 13:10→): what runs, what is done, what is next, how to resume after a VM/asgard/session crash — read this first |
 | `asgard/models.sh` | per-model file, spec-type, cache-ram, sampling, thinking toggle (`north`, `qwen9b`, `gemma`, `qwen35b`) |
 | `asgard/serve.sh MODEL` | `exec llama-server` with all knobs (`NP`, `CTX`, `THREADS`, `THREADS_BATCH`, `NCMOE`, `SPEC`, `EXTRA`, `IGPU_MOE`, `DEV`, `VKVIS`); header = the pinned-cap rules |
 | `asgard/start.sh MODEL` / `--last` | `daemon -f -p ~/local-ai-runs/llama.pid serve.sh`, waits for `/health`, rotates `llama.log` → `.prev`, records every start in `~/local-ai-runs/last-start.env`; `--last` replays it |
@@ -436,6 +437,11 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   iq4 `cpu47-{mtp,none}-pin`, flashnext `cpu47-{mtp,none,t16}-pin`; no codebench), chain 2 = phases A/B/C pinned (exit-3 gate
   removed) + phase D pinned codebench at each model's E2E config. Started 12:25 (logs rotated to `.5` / `.4`). No more cold
   power-off requests for T2; the owner's adapter/jack check is the open item.
+- 14 Sep 12:25–13:25 — chain 1 pinned continuation complete: `qwen122b cpu48-mtp-pin` 4.76 / **5.43** (nextn block alone = the k=47
+  gain at depth 4096), `qwen122b-iq4 cpu47-mtp-pin` 4.94 / 5.21, `cpu47-none-pin` 2.45 / 2.43, flashnext `cpu47-mtp-pin`
+  START_FAILED (**file has no MTP layers** — not infra), `cpu47-none-pin` 2.69 / 2.50, `cpu47-t16-pin` **3.32** / 2.83. No AC event
+  (4 this boot). `T2_CHAIN1_DONE` 13:22; chain 2 phase A (E2E rust+go, pinned) started 13:25 with `qwen122b k=47 MTP`. Full table
+  results-t2.md §2.5. `STATUS.md` created 13:10 (live restart sheet, owner's request after the 2nd VM crash) and linked from §1.
 
 ## 7. At the real end (when the research phase is over)
 
