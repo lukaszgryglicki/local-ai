@@ -282,6 +282,65 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   converts all direct requests to buffered while a file is mmap'd — llama.cpp maps the GGUFs, so `direct=always` would only
   affect read()-based streams (curl writes, sha256/verify-slow reads), which the metadata-only cache already keeps out of the ARC.
 
+- **14 Sep 06:22:05 — asgard died silently a 2nd time**, again inside `e2e-test.sh qwen35b-q8 asm` (chain 2b's rerun, started
+  06:17:25): ~270 s into the 82K-token prefill (serve.out last line n_tokens 76471, progress 0.93, 291 t/s; telemetry last
+  sample 06:22:03 GPU 99 %, 90 W, SM 975, flags 0x20). Watchdog benign (core 47, PCH 63, GPU 67, AC 1). Same signature as
+  13 Sep: no panic text, no dump, no shutdown record; owner power-cycled (boot 06:25). Death #1 was ~250 s into the same
+  prefill (progress ≈ 0.88) — not a fixed token position or timer (qwen.sh/serve.sh timeouts are 12 h; unstick only polls
+  `/slots`). What is unique to these two runs: only q8 needs > 250 s of continuous max-power prefill for this prompt (q4: 212 s,
+  survived; the sweeps' 127K deltas at ~100–108 W survived dozens of times), and the telemetry before death #1 has the
+  campaign's three highest GPU power readings — **140.7 W (flags 0x4C = HW thermal slowdown + HW slowdown + SW power cap),
+  127.7 W, 122.5 W (5 s before death) against the 110 W limit**. HW-slowdown bits appear 24× in the campaign at GPU core
+  ≤ 75 °C (slowdown temp is 97 °C) → asserted by the Dell EC (adapter power sharing / power brake), not by GPU heat.
+  Working theory: a power-path event under sustained > 4 min max GPU draw (EC brake/brown-out → GPU falls off the bus →
+  driver hard-hangs). Both deaths may also have been panics we could not see: GENERIC has KDB/DDB and
+  `debug.debugger_on_panic=1` (a panic sits at the DDB prompt forever = indistinguishable from a hang over the network),
+  `dumpdev=NO`, no swap partition on any of the four NVMes (efi + zfs only) → no dump possible without repartitioning.
+- 14 Sep 06:37 — **`debug.debugger_on_panic=0`** live + `/etc/sysctl.conf` (commented): a panic now reboots after 15 s
+  (`kern.panic_reboot_wait_time`), so the box comes back by itself and a self-reboot tells a panic from a hard hang. Revert: 1.
+  `kern.coredump=0` untouched. Telemetry restarted (GUARD_PCH=108), stale `e2e.busy` removed.
+- 14 Sep 06:38–06:50 — **GPU power mitigation attempts, all withdrawn — never repeat**: `nvidia-smi -pl 90` → "Changing power
+  management limit is not supported for GPU" (mobile Quadro; limits fixed 110/110 W). `nvidia-smi -lgc 300,1500` was accepted
+  and `nvidia-smi -pm 1` enabled legacy persistence mode; **within 3 minutes the driver lost the device: `nvidia-smi` → "Unable to
+  determine the device handle for GPU0: 0000:01:00.0: Not Found / No devices were found"** (still on the PCI bus, `hw.nvidia.gpus.0`
+  present, no NVRM line in messages; `-pm 0`/`-rgc` could not reach it either). Chain 3's start pin check ran on the CPU
+  (Vulkan ErrorOutOfDeviceMemory, core 84 °C) — killed. Per the owner's instruction: `kldunload nvidia-modeset` (nvidia went with
+  it), `kldload nvidia-modeset` → GPU back (1035 MHz idle, 0 MiB, persistence off, clocks default). Rule: **no `-pl`/`-lgc`/`-pm`
+  on this driver**; the only remaining power levers are workload-side (shorter/slower prefills, no q8 asm) — to be discussed.
+- 14 Sep 06:46 — **q8 asm recorded as FAIL-infra ×2 (machine froze)**, not rerun (hand-written `summary.txt` in both attempt
+  dirs with a `MACHINE FROZE` marker; scoreboard.py grades it `FAIL-infra (machine froze)`; results-t1.md §5.3 regenerated).
+  `t1-chain3.sh` started standalone (chain 2b retired): pin check **HEALTHY 62.68 t/s / SM 1935** at 06:47:44 → kat THREADS A/B →
+  q4 NCMOE=22/24 depth headroom → flashnext fits + sweep. Long prefills at up to ~108 W remain in the chain (they have never
+  failed); E2E-class single prefills > 4 min (q8 asm, T2 E2E) only with the owner present.
+- 14 Sep 07:01 — kat THREADS A/B done (chain 3 step 1): 8 threads 26.15/26.35, 16 threads 27.87/27.60 t/s → **+5.5 % for 16**;
+  the 13 Sep 34.02 (+35 %) was an artefact. `MODEL_THREADS=16` kept for kat-q4; results-t1.md §4.2 and the models.sh comment fixed.
+- 14 Sep 07:02:00 — **AC drop #4: `acpi_acad0: Off Line` → `On Line` 07:02:12** (12 s, battery 100 %, power profile economy →
+  performance). Chain 3 step 2 (q4 `NCMOE=22` depth headroom) was one minute into its run: `q4cpu22-hd,2048: pp 257, tg 11.7 t/s`
+  (healthy 831 / 32.5) with the Quadro at 1035 MHz / P2 / 99 % / 45 W and the *Idle* reason → **GPU pinned again**. Chain 3 and
+  the server killed 07:04; reference pin check 07:05 **PINNED** (`pin-0705`: 16.32 t/s, 1035 MHz P2). Not retried: on 13 Sep
+  replug, warm reboot, `zzz` and a driver reload all failed and only the cold power-off (+ AC unplug + 30 s button hold) released
+  it → **owner power cycle requested**; GPU work stopped (rule: no reboot/driver reload unprompted). Chain 3 steps 2–3 (k=22/24
+  headroom, flashnext fits + sweep) are re-packaged as `~/local-ai-runs/t1-chain3b.sh` (pin check first — exits 2 while pinned).
+  Open question for the owner: was the 07:02:00 unplug a hand action? If not, this adapter/jack drops by itself (4th event)
+  and is the prime suspect for the two freezes as well (EC power-path events during max-power prefill).
+- 14 Sep 07:10 — owner decisions: (a) keep testing in the pinned regime ("it looks like it will keep happening"), extrapolate
+  the un-pinned speed; (b) rank by **coding quality, not speed**; (c) **select the T1 winner, delete nothing, then STOP** — owner
+  restarts asgard (releases the pin) and the best candidates get a small-task output-t/s follow-up. `t1-chain3b.sh` rewritten
+  for the pinned regime (pin checks log only; step 1 = pin calibration: `vram-pin` depth bench + `cpu20-pin`/`cpu19-t16-pin`/
+  `cpu29-pin` codebench sweeps; steps 2–3 = depth k=20/22/24 and flashnext, cut per (c)). Pin at start: 16.30 t/s, SM 1035,
+  **mem 6801 MHz, P2** — an SM/P-state pin, the memory clock is nearly full (7000 max).
+- 14 Sep 07:20 — **T1 verdict: `qwen35b-q4`** (results-t1.md §6): zero functional failures on rust/go/c (rust 4/5 spec-only, go
+  5/5, c 5/5), asm 0/4 by the 240-min cap; `kat-q4` ties 14/19 but has a real go bug (6 MB input) and a runaway-thinking asm
+  failure (100 080-char thinking block cut at the 32 768-token cap, zero tool calls); `qwen35b-q8` 12/15 is worse than q4 on
+  rust and go, asm FAIL-infra ×2. `models.sh`: **`fast|t1` frozen → `qwen35b-q4`** (`NP=1 CTX=262144 SPEC=none NCMOE=20
+  IGPU_MOE=0 THREADS=8 THREADS_BATCH=16`); `best|t2` still open. All models kept.
+- 14 Sep 07:37 — **pin calibration done, chain 3b stopped by hand** before its speed-only steps (owner: stop after the T1 winner).
+  healthy/pinned tg: all-VRAM `qwen35b` 3.75× (16.30 t/s), `qwen35b-q4 cpu20` 2.87× (10.98), `qwen35b-q8 cpu29` 2.82× (7.61),
+  `kat-q4 cpu19-t16` 2.08× (13.35, short answers — lower bound); pinned = SM 1035 P2, mem 6801 MHz. Rule of thumb in results-t1.md
+  §6.1: ×3.75 all-VRAM, ×2.8–2.9 T1-class, T2-class to be calibrated. Server down, nothing running but telemetry + watchdog;
+  **asgard is ready for the owner's restart** (cold power-off releases the pin). Not run: q4 depth k=20/22/24 pinned, flashnext
+  fits/sweep (`t1-chain3b.sh` steps 2–3), all T2 work — resume after the restart per the quality-first rule.
+
 ## 7. At the real end (when the research phase is over)
 
 - Boot start: remove `nostart` from the `KEYWORD` line of `asgard/rc.d/llama`, reinstall the stub

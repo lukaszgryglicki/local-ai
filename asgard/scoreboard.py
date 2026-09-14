@@ -2,7 +2,8 @@
 """asgard/scoreboard.py [--csv] [MODEL ...] - graded E2E scoreboard from /data/ai/*-task-*/summary.txt.
 
 Grades (13 Sep 2026, per the owner's ranking):
-  FAIL-infra           the run was compromised by the machine, not the model (battery marker from e2e-test.sh; a
+  FAIL-infra           the run was compromised by the machine, not the model (battery marker from e2e-test.sh, or a
+                       hand-written 'MACHINE FROZE' summary.txt after a hard hang - 14 Sep 2026; a
                        resume/downtime is only a note - the result stands, as in results-t0.md)
   FAIL-task s/T (...)  the program failed s of T verifier checks; the failed check names say *how* it failed
                        ("spec-only" when every functional check passed and only a spec check - signature, nodeps,
@@ -43,7 +44,8 @@ def parse(path):
     r['model'], r['task'], r['date'], r['rc'], r['wall'] = m.group(1), m.group(2), m.group(3), m.group(4), int(m.group(5))
     m = re.search(r'resumes=(\d+) downtime=(\d+) s', head); r['resumes'], r['downtime'] = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
     m = re.search(r'ac_drops=(\d+)', head); r['ac_drops'] = int(m.group(1)) if m else None
-    r['battery'] = 'FAIL-infra' in head or 'ON BATTERY' in head
+    r['freeze'] = 'MACHINE FROZE' in head          # hand-written summary.txt after a hard hang (14 Sep 2026, q8 asm x2)
+    r['battery'] = not r['freeze'] and ('FAIL-infra' in head or 'ON BATTERY' in head)
     m = re.search(r'result: (\S+) \| turns: (\d+) \| duration: (\d+) s \| tool calls: (\{.*?\}) \| tool errors: (\d+)', s)
     if m:
         r['agent'], r['turns'], r['tool_errors'] = m.group(1), int(m.group(2)), int(m.group(5))
@@ -77,6 +79,8 @@ def parse(path):
 
 
 def grade(r):
+    if r.get('freeze'):
+        return 'FAIL-infra (machine froze)'
     if r['battery']:
         return 'FAIL-infra (on battery)'
     if r['verdict'] is None:

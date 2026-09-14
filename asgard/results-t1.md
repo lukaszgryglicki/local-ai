@@ -161,6 +161,15 @@ the prompt), so the deepest point is 66.5K, not 131K. Two observations for the T
   same points on `kat-q4`/`qwen35b-q8`. The E2E tasks record per-request pp at depth 23–130K (`per-request.txt`), which
   will show whether this bites real agentic work (T0 saw 252–406 t/s for 1–4K batches at 25–40K depth).
 
+**Headroom attempt 14 Sep 07:01 (chain 3 step 2, `GEN=64 bench.py q4cpu22-hd 2048 65536 131072` with `NCMOE=22`) — FAIL-infra,
+GPU pinned.** The first row came out `q4cpu22-hd,2048: pp 256.6, tg 11.69 t/s` (healthy k=20: 831 / 32.5). Cause: **`acpi_acad0:
+Off Line` 07:02:00 → `On Line` 07:02:12** (12 s, battery 100 %), one minute after the k=22 server came up; from that moment
+the Quadro sat at 1035 MHz / P2 at 99 % utilisation and 45–48 W with the *Idle* clock-event reason — the §3.1 pin. Chain 3
+killed 07:04; reference pin check 07:05 `pin-0705,64: 16.32 t/s, 1035 MHz P2` = **PINNED** (13 Sep 11:29 gave 16.32 too).
+As on 13 Sep only a cold power-off releases it (driver reload tried and failed then) → the k=22/24 headroom points and the
+flashnext fits wait for the owner's power cycle; the CPU-side and documentation work continues. Fourth AC event of the
+campaign (13 Sep 00:0x long, 06:47:55 21 s, 10:58:07 30 min, 14 Sep 07:02:00 12 s): every one of them left the GPU pinned.
+
 ### 2.4 E2E rust/go/c/asm (chain 2, `e2e-all.sh qwen35b-q4`, started 13 Sep 12:52 after pin check 61.19 t/s)
 
 **Grading (introduced 13 Sep, owner's ranking; `asgard/scoreboard.py` computes it from every `summary.txt`, retroactively for T0):**
@@ -473,7 +482,7 @@ Q4_K_L is ~0.42 GiB/layer lighter than UD-Q4_K_XL (14 725 vs 15 144 at k=20), he
 (a correct SWAR `popcount64` + complexity note), `finish_reason=stop`, 406 tokens in 29.7 s ≈ 13.7 t/s under the pin (k=19).
 Same kwargs/sampling as `qwen35b`, so `sweep.sh kat-q4 "none=none"` and `e2e-all.sh kat-q4` need no template work.
 
-### 4.2 Speed sweep (`sweep.sh kat-q4`, 13 Sep 10:47–10:59, GPU healthy — first T1 numbers without the clock pin)
+### 4.2 Speed sweep (`sweep.sh kat-q4`, 13 Sep 10:47–10:59 + THREADS A/B 14 Sep 06:50–07:01, GPU healthy — first T1 numbers without the clock pin)
 
 `codebench.py LABEL 2` (two short coding prompts, thinking on, own EOS), GAP 150 s, PCH 69–86 °C, cap 5300 throughout,
 no verification overlap (`wait-no-verify.sh` idle). CSV: `~/local-ai-runs/sweep-kat-q4.csv`.
@@ -485,18 +494,22 @@ no verification overlap (`wait-no-verify.sh` idle). CSV: `~/local-ai-runs/sweep-
 | `igpu19` (`IGPU_MOE=19 NCMOE=0`) | iGPU (Vulkan1, shared RAM) | 16.78 | **6.3 / 7.1** | 53 | tg −33 %, pp 12× slower; iGPU clock was 1150–1250 MHz while generating (§3.4) |
 | `cpu19-t16` (`THREADS=16`) | CPU RAM | ~~7.21~~ **INVALID** | ~~41 / 33~~ | — | **the AC adapter dropped at 10:58:07, one second after this config came UP** (`acpi_acad0: Off Line`; battery = CPU 1 GHz / 6 W, GPU P5 360 MHz) → FAIL-infra, re-run pending on mains (chain 2) |
 | `cpu19-t16b` (`THREADS=16`, re-run 11:47:04–11:47:24, chain 2, GPU healthy after the cold power-off) | CPU RAM | **34.02** (33.80 / 33.97) | 80 / 93 | 20 | **+35 % tg vs 8 threads** — and that with the CPU *capped* 2400→3200 MHz the whole 20 s (START pch=92 → the watchdog had dropped the turbo band after the 21 GB load; the settle step in sweep.sh was added after this run). Answers were as short as in `cpu19` (209 + 424 tokens), so the KV-depth is comparable. Needs one uncapped confirmation run (`cpu19-t16c`) — scheduled after the E2E cycle |
+| `cpu19b` (THREADS 8, **A/B 14 Sep 06:50**, chain 3, back-to-back, settle-guarded, cap 5300, AC 1) | CPU RAM | **26.15** | 78 / 95 | 24 | A/B run 1 |
+| `cpu19-t16c` (THREADS 16, A/B 06:53) | CPU RAM | **27.87** | — | 23 | A/B run 2 |
+| `cpu19c` (THREADS 8, A/B 06:57) | CPU RAM | **26.35** | — | 24 | A/B run 3 |
+| `cpu19-t16d` (THREADS 16, A/B 07:00) | CPU RAM | **27.60** | — | 23 | A/B run 4 |
 
 Conclusion for `kat-q4` (three valid configs, all on mains — the 10:58:07 AC drop came *after* `igpu19` ended 10:55:14):
 **VRAM + CPU RAM (`NCMOE=19`, 8 threads, no spec)** — 25 t/s is 4× the T1 goal (≥ 6) and even above the "ideal" 15–25 band
 of T0. The iGPU/RAM split is out for the T1 models (same verdict as `qwen35b-q4` on 12 Sep: `igpu20` 16.2 vs `cpu20` 30.7):
 the UHD P630 is simply too weak for the expert matmuls, and it is *catastrophic* for prompt processing (6–7 t/s — a
-100 K-token coding context would take hours). ngram-mod stays off (spec gains vanish on real reasoning output). **THREADS=16 wins for kat-q4** (34.0 vs 25.2 t/s,
-even under a 2400–3200 MHz cap) → `models.sh kat-q4` gets `MODEL_THREADS=16` before its E2E run; note that the same
-switch *loses* on `qwen35b-q8` (§5.2: 20.14 vs 21.45) **and** on `qwen35b-q4` (§2.2: 30.22 vs 31.56) — the same
-architecture at the same bit-width as KAT. That makes KAT's +35 % the outlier: `cpu19` (25.22, 10:47) and `cpu19-t16b`
-(34.02, 11:47) were 60 minutes and one cold power-off apart, both on ~630 generated tokens only. Until an A/B under one
-settle-guarded run (`cpu19b` 8 threads vs `cpu19-t16c` 16 threads, back-to-back) says otherwise, `MODEL_THREADS=16`
-stays for the kat-q4 E2E (worst case −4 % as on the Qwen files, best case +35 %); the A/B runs right after that E2E.
+100 K-token coding context would take hours). ngram-mod stays off (spec gains vanish on real reasoning output). **THREADS=16 wins for kat-q4, but only by +5.5 %** — the 13 Sep +35 % (34.02) was the outlier the previous version of this
+paragraph suspected: the settle-guarded back-to-back A/B of 14 Sep 06:50–07:01 (chain 3; four loads, GAP 150 s, cap 5300,
+PCH 68–79 °C, AC on, GPU healthy) gives 8 threads **26.15 / 26.35** and 16 threads **27.87 / 27.60** t/s (27.7 vs 26.25,
+spread within each arm 0.2–0.3). The 34.02 run (11:47, right after the cold power-off, CPU capped 2400→3200 MHz) is kept
+in the table for the record but not used. Note the sign differs from the Qwen files — `qwen35b-q8` (§5.2: 20.14 vs 21.45)
+and `qwen35b-q4` (§2.2: 30.22 vs 31.56) *lose* 4–6 % with 16 threads — so THREADS stays a per-model knob
+(`MODEL_THREADS` in models.sh): **kat-q4 = 16** (confirmed; also what its E2E ran with), Qwen files = default 8.
 E2E rust/go/c/asm with these settings: chain step after the sweeps.
 
 ### 4.3 E2E rust/go/c/asm (chain 2, `e2e-all.sh kat-q4`, 13 Sep 18:16–20:05, THREADS 16, pin check 64.00 t/s before)
@@ -565,14 +578,15 @@ per expert layer, but 29 vs 20 offloaded layers and the 11 GPU-resident layers +
 ratio). The iGPU/RAM split is dead for T1 (third model, same verdict: 16.2 / 16.8 / 6.4 t/s vs 31 / 25 / 21 on CPU RAM).
 E2E rust/go/c/asm: chain 2, after `qwen35b-q4` and `kat-q4`.
 
-### 5.3 E2E rust/go/c/asm (chain 2, `e2e-all.sh qwen35b-q8`, 13 Sep 20:08–22:25 + asm rerun 14 Sep; THREADS 8, pin check 63.01 t/s)
+### 5.3 E2E rust/go/c/asm (chain 2, `e2e-all.sh qwen35b-q8`, 13 Sep 20:08–22:25; asm rerun 14 Sep 06:17 killed again; THREADS 8, pin check 63.01 t/s)
 
 | model | task | grade | wall | turns / tool calls / errors | tg t/s (agg; min–max) | max depth | quality | notes |
 |---|---|---|---|---|---|---|---|---|
 | qwen35b-q8 | rust | FAIL-task 3/5 (functional: roundtrips, signature) | 302 s | 10 / 10 / 1 | 20.7 (19.4–21.1) | 28K | tests=4, unsafe=0, roundtrips=15ok/3bad | — |
 | qwen35b-q8 | go | FAIL-task 4/5 (functional: comparisons) | 573 s | 23 / 22 / 4 | 20.2 (19.2–21.0) | 36K | cmp=46ok/1bad | — |
 | qwen35b-q8 | c | **PASS 5/5** | 118 min | 53 / 52 / 4 | 16.7 (13.5–20.7) | 127K | asserts=26, malloc/free=13/7, arith=420ok, malformed=ok, empty=ok | — |
-| qwen35b-q8 | asm | no verdict (running?) | — | — | — | — | — | — |
+| qwen35b-q8 | asm | FAIL-infra (machine froze) | 280 s | — | — | — | — | — |
+| qwen35b-q8 *(superseded attempt 20260914-061725)* | asm | FAIL-infra (machine froze) | 259 s | — | — | — | — | — |
 
 - **rust FAIL-task 3/5 in 302 s**: `fn reverse` without `pub` (same spec miss as q4) *and* a functional bug — the program
   reversed only the first stdin line (`ab\ncd` → `ba` instead of `dc\nba`), 15/18 round-trips; 4 unit tests pass.
@@ -581,10 +595,87 @@ E2E rust/go/c/asm: chain 2, after `qwen35b-q4` and `kat-q4`.
 - **c PASS 5/5 in 118 min** (slowest c run of T1: q4 54 min, kat 50 min): 53 turns, 52 tool calls, 4 tool errors, depth 127K,
   tg 16.7 aggregate (13.5 at the deep end — Q8 experts move ~2× the bytes of Q4 per token), 26 asserts, 420/420 arithmetic
   lines, malformed/empty input ok. It finished at 22:24, five minutes before the machine died (ops.md 22:29:45).
-- **asm**: the 13 Sep attempt was killed by the outage 4 min in (FAIL-infra, archived as `.prev-*`); rerun 14 Sep by
-  `t1-chain2b.sh` — see the table row.
+- **asm FAIL-infra ×2 (machine froze)**: both attempts died silently *inside the first 82K-token prefill* — 13 Sep 22:29:45
+  (~250 s in, progress ≈ 0.88) and the rerun 14 Sep 06:22:05 (~270 s in, progress ≈ 0.95). Nothing was generated either time, so
+  the model is not graded; the archived attempt is `asm-task-qwen35b-q8.prev-20260914-061725`. Only q8 needs > 250 s for this
+  prompt (pp 292 t/s; q4 did it in 212 s at 387 t/s and survived; the sweeps' 127K-token deltas at ~100–108 W also survived),
+  and the telemetry before death #1 shows the GPU at **140.7 / 127.7 / 122.5 W against its 110 W limit** with EC-asserted
+  HW-slowdown flags (0x4C) — a power-path event, not heat (GPU 67–73 °C, PCH 63–80). Not rerun unattended; see ops.md 14 Sep
+  for the (failed) mitigation attempts (`-pl` unsupported, `-lgc`/`-pm` lost the device handle).
 
 **q8 vs q4 (same model, Q8_0 vs UD-Q4_K_XL, k=29 vs 20):** rust 3/5 vs 4/5, go 4/5 vs 5/5, c 5/5 vs 5/5 (118 vs 54 min),
-asm pending vs 0/4. At ~2× the wall time and 0.65× the tokens/s, Q8 bought nothing in outcomes on these four tasks —
+asm FAIL-infra ×2 (untestable: the box died twice in its prefill) vs 0/4. At ~2× the wall time and 0.65× the tokens/s, Q8 bought nothing in outcomes on these four tasks —
 one sample each, but consistent with the sweep: q8 21.4 t/s vs q4 31.6.
 
+## 6. T1 verdict — **`qwen35b-q4` wins on coding quality** (2026-09-14 07:20; `fast|t1` profile frozen in models.sh)
+
+Owner's ranking rule (14 Sep 07:15): pick the T1 winner by **coding output quality**, not speed; keep every model on disk;
+speed is measured again on the best candidates with a small task once the GPU pin is gone (owner restart). Quality is
+unaffected by the pin — greedy decoding produces the same tokens at any clock, only the wall time changes.
+
+E2E scoreboard (`scoreboard.py`, verifier checks per task rust 5 / go 5 / c 5 / asm 4; "spec-only" = every functional
+check passed and only a spec check was missed; T0 `qwen35b` = the IQ2_M all-VRAM winner of results-t0.md as reference):
+
+| model | rust | go | c | asm | raw score | functional failures | wall (rust / go / c / asm) |
+|---|---|---|---|---|---|---|---|
+| **`qwen35b-q4`** UD-Q4_K_XL, `NCMOE=20`, 8 thr | 4/5 **spec-only** (`fn reverse(s: &str) -> String` signature not used; 18/18 round-trips) | **PASS 5/5** (6 MB input ok, 47/47 comparisons) | **PASS 5/5** (32 asserts, 420/420 arithmetic lines, malformed + empty input ok) | 0/4 — **hit the 240-min cap while still working** (240K tokens at 15 t/s) | 14/19 | **0** | 155 s / 317 s / 54 min / 240 min (cap) |
+| `kat-q4` Q4_K_L, `NCMOE=19`, 16 thr | **PASS 5/5** | 4/5 functional (`6 MB input rc=1, got=b''`; 46/47 comparisons) | **PASS 5/5** (2 asserts) | 0/4 — **runaway thinking**: one response with a 100 080-char thinking block, cut by the 32 768-token output cap, zero tool calls, no project (40 min) | 14/19 | 1 (+ the runaway) | 136 s / 10 min / 50 min / 40 min |
+| `qwen35b-q8` Q8_0, `NCMOE=29`, 8 thr | 3/5 functional (15/18 round-trips + signature) | 4/5 functional (46/47) | **PASS 5/5** (26 asserts) | FAIL-infra ×2 (machine froze during the 82K-token prefill, §5.3) | 12/15 | 2 | 302 s / 573 s / 118 min / — |
+| T0 `qwen35b` UD-IQ2_M, all VRAM | PASS 5/5 | PASS 5/5 | 4/5 functional (malformed lines) | 2/4 (cap; encode 1/700) | 16/19 | 1 | 110 s / 256 s / 43 min / 240 min (cap) |
+
+**Why `qwen35b-q4`:**
+
+1. It is the only model in the whole campaign (T0 included) with **zero functional failures on rust/go/c** — its single
+   missed check is the exact-signature spec in rust; the program itself round-trips 18/18. Its C solution is also the
+   most thoroughly tested one (32 asserts vs 2 for KAT, 26 for q8).
+2. `kat-q4` ties on the raw score but has a real correctness bug (the 6 MB input case of the go task returns nothing) and
+   showed a failure mode that matters for agentic use: on the asm task it *thought* for 32K tokens without acting. Same
+   architecture and bit-width, so nothing is gained on resources either (it needs THREADS=16 for its +5.5 %, §4.2).
+3. `qwen35b-q8` — 1.65× the weight bytes and 15 GiB more RAM — is functionally *worse* than q4 on rust (3 bad round-trips)
+   and go, equal on c, and 30 % slower (§5.2). Its asm result is unknowable without a rerun (both attempts froze the box
+   at maximum GPU power, §5.3); even 2/4 would only tie q4's raw total while staying behind on functional failures. A
+   pinned-regime rerun would be power-safe (GPU ≤ 57 W) but slow; it cannot realistically change this verdict.
+4. Caveat kept on record: the T1 asm zeros are **not pure quality signals** — q4 was cut by the wall-time cap (at 15 t/s
+   it generated 240K tokens; T0's IQ2_M at 30 t/s got to 2/4 in the same 240 min), KAT by its own runaway. If asm-class
+   tasks matter, rerun q4's asm after the restart with a higher cap (`E2E_CAP=28800 e2e-test.sh qwen35b-q4 asm`).
+
+**Frozen (`models.sh model_env fast|t1` → `qwen35b-q4`):** `NP=1 CTX=262144 SPEC=none NCMOE=20 IGPU_MOE=0 THREADS=8
+THREADS_BATCH=16` (`MODEL_CACHE_RAM=8192`, thinking on) — the §2.2 sweep winner: 31.6 t/s tg and 831 t/s pp at 2K depth,
+22.9 t/s / 195 t/s at 66.5K depth on a healthy GPU (§2.3). Nothing is deleted: `kat-q4` and `qwen35b-q8` stay on disk
+(owner's instruction; `kat-q4` remains the natural second candidate for the small-task speed follow-up).
+
+**What happens next (owner):** restart asgard (cold power-off releases the GPU pin, §3.1.2), then the small-task
+output-t/s follow-up on the best candidates — `qwen35b` (T0), `qwen35b-q4` (T1), optionally `kat-q4` — e.g.
+`sweep.sh qwen35b-q4 "cpu20-final=none;;NCMOE=20"` (two real coding prompts, aggregate tg) or a short `e2e-test.sh` rust
+run; T2 (`flashnext`, `qwen122b`, `qwen122b-iq4`) follows the same quality-first rule (results-t2.md).
+
+### 6.1 GPU-pin calibration — how much slower the pinned regime is, and how to extrapolate (14 Sep 07:12–07:37, `t1-chain3b.sh` step 1)
+
+The pin (§3.1) is reproducible to the second decimal — the all-VRAM reference gives 16.30–16.32 t/s on 13 and 14 Sep — so a
+pinned measurement is a consistent regime, just a slow one. Under load it reads **SM 1035 MHz, P2, memory 6801 MHz (7000
+max), clock-event reason "Idle"**: an SM/P-state lock, not a memory-clock cut, yet the all-VRAM slowdown (3.75×) is twice
+the SM-clock ratio (1935/1035 = 1.87×) — P2 evidently costs more than the reported clocks say. Same prompts, greedy, same
+token counts in both arms (the `TOTAL` rows list them), GAP 150 s, settle-guarded, AC on, `~/local-ai-runs/sweep-*.csv`
+and `pin-calib.log`:
+
+| config (workload) | healthy tg t/s (date) | pinned tg t/s (14 Sep) | **healthy / pinned** |
+|---|---|---|---|
+| `qwen35b` UD-IQ2_M all in VRAM (pin check: 64-token prompt, 256 generated) | 60.23 / 61.19 / 62.68 (13–14 Sep) | 16.30 | **3.75×** |
+| `qwen35b-q4` `cpu20` (20 expert layers in RAM, 8 thr; 3 692 tokens) | 31.56 (`cpu20-ac2`, 13 Sep) | 10.98 (`cpu20-pin`) | **2.87×** |
+| `qwen35b-q8` `cpu29` (29 layers in RAM, 8 thr; 3 767 tokens) | 21.45 (`cpu29`, 13 Sep) | 7.61 (`cpu29-pin`) | **2.82×** |
+| `kat-q4` `cpu19` THREADS=16 (19 layers in RAM; 633 tokens) | 27.7 (A/B mean, 14 Sep 06:53–07:00) | 13.35 (`cpu19-t16-pin`) | 2.08× |
+| `qwen35b` all VRAM, `bench.py` depth 2048 / 16384 (pp, tg) | *not measured healthy yet* | pp 294 / 272, tg 15.95 / 13.57 (`vram-pin`) | — (free after the restart: `GEN=64 bench.py vram-healthy 2048 16384`) |
+
+Reading: the pin only slows the GPU-resident part of a token (attention, dense layers, the VRAM-resident experts); the
+RAM-resident experts run on the CPU at full speed. Splitting the per-token time with the all-VRAM 3.75× as the GPU
+factor (`1/P = 3.75·g + c`, `1/H = g + c`) gives a GPU share of ≈ 68 % for `cpu20` and ≈ 66 % for `cpu29` — consistent
+with each other. KAT's 2.08× does not fit that picture (it would mean a 39 % GPU share for the same architecture at
+the same bit-width); its arms are short answers (633 tokens, 2 × ~316) where fixed per-request costs weigh more, so its
+factor is the least reliable of the three — treat it as a lower bound.
+
+**Rule of thumb for extrapolating a pinned number to a healthy GPU:** all-VRAM configs × **3.75**; T1-class configs
+(about half the expert layers in RAM) × **2.8–2.9**; T2-class configs (all experts in RAM, only attention + dense on
+the GPU) will be *less* than that — probably 1.3–1.8×, to be calibrated with one pinned/healthy pair when the pin is
+gone. Prompt processing was not calibrated (the k=22 headroom run gave one pinned point, `q4cpu22-hd,2048: pp 257`,
+against 831 healthy for k=20 = 3.2×, and `vram-pin` has no healthy pair yet). None of this touches the quality ranking
+in §6, which is what the T1 choice rests on.

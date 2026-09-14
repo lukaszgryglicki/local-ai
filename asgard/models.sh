@@ -28,7 +28,10 @@ model_env() {
     vram|t0|fastest-vram) MODEL_PROFILE=fastest-vram; set -- qwen35b
       NP=${NP:-1} CTX=${CTX:-262144} SPEC=${SPEC:-none} NCMOE=${NCMOE:-0} IGPU_MOE=${IGPU_MOE:-0} THREADS=${THREADS:-8} THREADS_BATCH=${THREADS_BATCH:-16}
       export NP CTX SPEC NCMOE IGPU_MOE THREADS THREADS_BATCH ;;
-    fast|t1|best|t2) echo "profile '$1' is not frozen yet (T1 = results-t1.md in progress; T2 not started) - name a model instead" >&2; return 1 ;;
+    fast|t1) MODEL_PROFILE=fast; set -- qwen35b-q4   # T1 winner by coding quality (results-t1.md §6, 14 Sep 2026): rust 4/5 (spec-only), go 5/5, c 5/5
+      NP=${NP:-1} CTX=${CTX:-262144} SPEC=${SPEC:-none} NCMOE=${NCMOE:-20} IGPU_MOE=${IGPU_MOE:-0} THREADS=${THREADS:-8} THREADS_BATCH=${THREADS_BATCH:-16}
+      export NP CTX SPEC NCMOE IGPU_MOE THREADS THREADS_BATCH ;;
+    best|t2) echo "profile '$1' is not frozen yet (T2 = results-t2.md in progress) - name a model instead" >&2; return 1 ;;
   esac
   MODEL_NAME=$1 MODEL_DIR= MODEL_EXTRA= MODEL_BIN= MODEL_THREADS=   # MODEL_THREADS = per-model --threads default (env THREADS wins; serve.sh falls back to 8); MODEL_BIN = llama-server binary if not build-vulkan-2 (serve.sh); MODEL_DIR = repo sub-folder of sharded files; MODEL_EXTRA = 'shard:bytes:sha256 ...' beyond MODEL_FILE (shard 1, the one llama-server opens)
   case "$1" in
@@ -48,7 +51,7 @@ model_env() {
       MODEL_FILE=Kwaipilot_KAT-Coder-V2.5-Dev-Q4_K_L.gguf MODEL_ALIAS=kat-coder-v2.5 MODEL_TITLE='KAT-Coder-V2.5-Dev Q4_K_L'
       MODEL_REPO=bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-GGUF MODEL_REV=d8f684f08d2950ea9d2db6a35ef7dada0707858b
       MODEL_BYTES=21768894880 MODEL_SHA256=bb0441b81a7cac064ae2fc139e6d4d0ef53dbdc8916ba117605070b7c03e455e
-      MODEL_SPEC=none MODEL_CACHE_RAM=8192 MODEL_NCMOE=19 MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}' MODEL_THREADS=16   # THREADS=16: 34.0 vs 25.2 t/s with 8 (sweep 13 Sep, results-t1.md §4.2); Q8 loses with 16, so per model
+      MODEL_SPEC=none MODEL_CACHE_RAM=8192 MODEL_NCMOE=19 MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}' MODEL_THREADS=16   # THREADS=16: +5.5 % vs 8 in the settle-guarded A/B 14 Sep (27.9/27.6 vs 26.2/26.4 t/s; the 13 Sep 34.0 was an outlier) - results-t1.md §4.2; the Qwen files lose with 16, so per model
       MODEL_TEMP=1.0 MODEL_TOP_P=0.95 MODEL_TOP_K=20 MODEL_MIN_P=0.0 ;;     # KAT card thinking mode: temp 1.0, top_p 0.95, top_k 20; NCMOE=19 = fit ladder 13 Sep (15 267 MiB after 1st request)
     qwen35b-q8) # T1/T2 quality reference: Qwen3.6-35B-A3B Q8_0 (34.4 GiB), ~29 of 40 expert layers outside VRAM
       MODEL_FILE=Qwen3.6-35B-A3B-Q8_0.gguf MODEL_ALIAS=qwen3.6-35b-a3b-q8 MODEL_TITLE='Qwen3.6-35B-A3B Q8_0'
@@ -78,6 +81,6 @@ model_env() {
       MODEL_EXTRA='Qwen3.5-122B-A10B-UD-IQ4_XS-00002-of-00003.gguf:49754258240:5d414ef4dd2b8c73780bafa6b47deb5f5d70ecfa804a785f3b1d98a9084310de Qwen3.5-122B-A10B-UD-IQ4_XS-00003-of-00003.gguf:12162581376:d9ac8af93d3818980762fdfb18d4ff30415d37233acba156995bfb816819bcf9'
       MODEL_SPEC=draft-mtp,ngram-mod MODEL_CACHE_RAM=8192 MODEL_NCMOE=all MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}'
       MODEL_TEMP=1.0 MODEL_TOP_P=0.95 MODEL_TOP_K=20 MODEL_MIN_P=0.0 ;;
-    *) echo "unknown model '$1' (profiles: vram|t0|fastest-vram = qwen35b  T1 candidates: qwen35b-q4|kat-q4|qwen35b-q8  T2 candidates: flashnext|qwen122b|qwen122b-iq4)" >&2; return 1 ;;
+    *) echo "unknown model '$1' (profiles: vram|t0|fastest-vram = qwen35b  fast|t1 = qwen35b-q4  T1 candidates: qwen35b-q4|kat-q4|qwen35b-q8  T2 candidates: flashnext|qwen122b|qwen122b-iq4)" >&2; return 1 ;;
   esac
 }
