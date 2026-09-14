@@ -264,6 +264,24 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
 - 13 Sep 20:05 — E2E `kat-q4` complete: rust 5/5 (136 s), go 4/5 (Scanner 64 KB limit on the 6 MB line), c 5/5 (after the verifier
   fix), asm 0/4 (two thinking-only answers, 32K output cap, no file). Pin check 63.01 t/s healthy → `qwen35b-q8` E2E started 20:08.
 
+- **13 Sep 22:29:45 — asgard died silently** (FAIL-infra window, no run charged: the q8 c task had finished 22:24, PASS 5/5; the asm
+  task had started 22:25:26 and was 4 min into its 82K-token prefill, GPU 99 %/122 W). Last watchdog status 22:29:27 was benign
+  (core 50 °C, PCH 77, NVMe 54, GPU 69, AC 1, cap 5300); last telemetry sample 22:29:44. No panic, no `/var/crash` dump, no
+  shutdown record in `last`, nothing in `messages` after 22:23:50 → hard hang or power loss, cause unknown (candidates: the
+  AC-adapter path — a GPU power spike at the prefill start; a GPU/PCIe hang). Owner powered it on 14 Sep 06:11. The bhyve
+  VM had been killed by the FreeBSD host ~21:40 the same evening (unrelated; nothing on asgard depends on it).
+- 14 Sep 06:15 — recovery: telemetry restarted (GUARD_PCH=108), stale `e2e.busy` removed, chain 2/3 (killed by the reboot)
+  replaced by `~/local-ai-runs/t1-chain2b.sh` (pin check → E2E `qwen35b-q8 asm` rerun via `e2e-all.sh qwen35b-q8 asm`, the
+  partial dir goes to `.prev-<ts>` → end pin check → `exec t1-chain3.sh`, whose pid-28430 wait was removed). ARC cap 8 GiB and
+  the nvidia module survived the reboot (loader/sysctl settings). GPU idle at 1035 MHz, 0 MiB before the pin check.
+
+- 14 Sep 06:40 — ARC cap 8 → **2 GiB** (owner's request; `/etc/sysctl.conf`: `vfs.zfs.arc.min=1073741824` *before*
+  `vfs.zfs.arc.max=2147483648` — the default min of RAM/32 = 4 GiB would reject a 2 GiB max), applied live during the q8 asm
+  run without effect on it (ARC was only 0.45 GiB: `zroot/data/local-ai` has `primarycache=metadata`, model data never sits in
+  the ARC; mmap pages live in the page cache). Direct I/O (`direct=` property, OpenZFS 2.4.4) left at `standard`: zfsprops(7)
+  converts all direct requests to buffered while a file is mmap'd — llama.cpp maps the GGUFs, so `direct=always` would only
+  affect read()-based streams (curl writes, sha256/verify-slow reads), which the metadata-only cache already keeps out of the ARC.
+
 ## 7. At the real end (when the research phase is over)
 
 - Boot start: remove `nostart` from the `KEYWORD` line of `asgard/rc.d/llama`, reinstall the stub

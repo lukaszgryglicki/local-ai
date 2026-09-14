@@ -565,3 +565,26 @@ per expert layer, but 29 vs 20 offloaded layers and the 11 GPU-resident layers +
 ratio). The iGPU/RAM split is dead for T1 (third model, same verdict: 16.2 / 16.8 / 6.4 t/s vs 31 / 25 / 21 on CPU RAM).
 E2E rust/go/c/asm: chain 2, after `qwen35b-q4` and `kat-q4`.
 
+### 5.3 E2E rust/go/c/asm (chain 2, `e2e-all.sh qwen35b-q8`, 13 Sep 20:08–22:25 + asm rerun 14 Sep; THREADS 8, pin check 63.01 t/s)
+
+| model | task | grade | wall | turns / tool calls / errors | tg t/s (agg; min–max) | max depth | quality | notes |
+|---|---|---|---|---|---|---|---|---|
+| qwen35b-q8 | rust | FAIL-task 3/5 (functional: roundtrips, signature) | 302 s | 10 / 10 / 1 | 20.7 (19.4–21.1) | 28K | tests=4, unsafe=0, roundtrips=15ok/3bad | — |
+| qwen35b-q8 | go | FAIL-task 4/5 (functional: comparisons) | 573 s | 23 / 22 / 4 | 20.2 (19.2–21.0) | 36K | cmp=46ok/1bad | — |
+| qwen35b-q8 | c | **PASS 5/5** | 118 min | 53 / 52 / 4 | 16.7 (13.5–20.7) | 127K | asserts=26, malloc/free=13/7, arith=420ok, malformed=ok, empty=ok | — |
+| qwen35b-q8 | asm | no verdict (running?) | — | — | — | — | — | — |
+
+- **rust FAIL-task 3/5 in 302 s**: `fn reverse` without `pub` (same spec miss as q4) *and* a functional bug — the program
+  reversed only the first stdin line (`ab\ncd` → `ba` instead of `dc\nba`), 15/18 round-trips; 4 unit tests pass.
+- **go FAIL-task 4/5 in 573 s**: `bufio.Scanner` over stdin, 64 KB token limit → the 6 MB single-line input yields *rc=0 and
+  empty output* (kat/gemma/north at least exited 1); 46/47 comparisons ok, vet/nodeps ok, 23 turns.
+- **c PASS 5/5 in 118 min** (slowest c run of T1: q4 54 min, kat 50 min): 53 turns, 52 tool calls, 4 tool errors, depth 127K,
+  tg 16.7 aggregate (13.5 at the deep end — Q8 experts move ~2× the bytes of Q4 per token), 26 asserts, 420/420 arithmetic
+  lines, malformed/empty input ok. It finished at 22:24, five minutes before the machine died (ops.md 22:29:45).
+- **asm**: the 13 Sep attempt was killed by the outage 4 min in (FAIL-infra, archived as `.prev-*`); rerun 14 Sep by
+  `t1-chain2b.sh` — see the table row.
+
+**q8 vs q4 (same model, Q8_0 vs UD-Q4_K_XL, k=29 vs 20):** rust 3/5 vs 4/5, go 4/5 vs 5/5, c 5/5 vs 5/5 (118 vs 54 min),
+asm pending vs 0/4. At ~2× the wall time and 0.65× the tokens/s, Q8 bought nothing in outcomes on these four tasks —
+one sample each, but consistent with the sweep: q8 21.4 t/s vs q4 31.6.
+
