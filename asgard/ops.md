@@ -507,6 +507,13 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
 - 15 Sep 09:26 — chain 3 `qwen122b` rust run 2: **PASS 5/5** in 883 s (15 min), 11 turns, tg 3.6 t/s, 58.8 % acceptance → §3.4 row.
   go run 2 running since 09:27.
 
+- 15 Sep 09:53 — chain 3 `qwen122b` go run 2: **FAIL-task 4/5** (comparisons 46/47, the same `bufio.Scanner` 64 KiB bug as run 1) in
+  1 560 s (26 min), 13 turns, tg 4.2 t/s, 70.2 % acceptance → §3.4 row; qwen122b is 0 for 2 on go, 1 for 2 on rust. `qwen122b-iq4 rust go`
+  run 2 started 10:03 (UP 46 s).
+
+- 15 Sep 10:24 — chain 3 `qwen122b-iq4` rust run 2: **PASS 5/5** in 1 213 s (20 min), 14 turns, tg 3.4 t/s → §3.4 row. go run 2 running
+  since 10:25 (last chain-3 task).
+
 ## 7. At the real end (when the research phase is over)
 
 - Boot start: remove `nostart` from the `KEYWORD` line of `asgard/rc.d/llama`, reinstall the stub
