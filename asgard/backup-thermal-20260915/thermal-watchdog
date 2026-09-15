@@ -1,0 +1,176 @@
+#!/bin/sh
+# thermal-watchdog — adaptive thermal guard for asgard (FreeBSD, Dell Precision 7750).
+# Every WD_INTERVAL s: samples core + PCH temps (NVMe every WD_NVME_EVERY ticks),
+# steps the HWP frequency cap down when hot / back up when cool, logs a line every
+# WD_LOG_EVERY ticks to WD_LOG, re-applies thermal-policy every WD_REAPPLY_EVERY
+# ticks, and powers off cleanly (WD_ACTION; or suspends to S3 with WD_ACTION=suspend) before the Dell EC does it
+# the hard way.
+# Cap regimes (2026-09-11, Turbo allowed): below BASE_RATIO (2.4 GHz non-turbo ceiling)
+# the original conservative integrator; between BASE_RATIO and MAX_RATIO (turbo band)
+# the cap follows the hottest core linearly (MAX at <= WD_CORE_LO, BASE at >= WD_CORE_HI),
+# rising WD_TURBO_STEP per tick, dropping at once, and only while PCH/NVMe are below
+# their LO thresholds; any HOT condition removes the band in one tick.
+# Started by rc.d/thermal_watchdog under daemon(8). Config: thermal-policy.conf
+set -u
+CONF=/usr/local/etc/thermal-policy.conf
+POLICY=/usr/local/sbin/thermal-policy
+RATIO_FILE=/var/run/thermal-policy.ratio
+MAX_RATIO=53; BASE_RATIO=24; MIN_RATIO=12; GPU_PCI=pci0:1:0:0
+WD_INTERVAL=5; WD_NVME_EVERY=6; WD_LOG_EVERY=12; WD_REAPPLY_EVERY=120
+WD_CORE_HI=85; WD_CORE_LO=70; WD_UP_AFTER=12; WD_STEP=2; WD_TURBO_STEP=2; WD_PCH_HI=95; WD_PCH_LO=85; WD_NVME_HI=75; WD_NVME_LO=70
+WD_CORE_CRIT=98; WD_CORE_CRIT_N=3; WD_NVME_CRIT=87; WD_NVME_CRIT_N=2; WD_PCH_CRIT=115
+WD_ACTION="/sbin/shutdown -p now"   # or the keyword "suspend": S3 instead of power-off, see emergency()
+WD_SUSPEND_PRE=""                    # suspend action only: command (sh -c, hard limit timeout 15 s) run right before the S3 request,
+                                     # e.g. stop the GPU job; a power-off action runs no hook (owner rule 2026-09-12: no waiting)
+WD_SUSPEND_POST=""                   # suspend action only: command (sh -c, backgrounded) run after the resume, e.g. start the job again
+WD_SUSPEND_GRACE=20; WD_SUSPEND_STATE=3
+WD_LOG=/var/log/thermal.log
+[ -r "$CONF" ] && . "$CONF"
+
+kldload -n cpuctl coretemp 2>/dev/null
+NCPU=$(sysctl -n hw.ncpu)
+TEMP_OIDS=$(i=0; while [ $i -lt $NCPU ]; do printf 'dev.cpu.%d.temperature ' $i; i=$((i+1)); done)
+THR_OIDS=$(i=0; while [ $i -lt $NCPU ]; do printf 'dev.cpu.%d.coretemp.throttle_log ' $i; i=$((i+1)); done)
+NVMES=$(nvmecontrol devlist 2>/dev/null | awk '/^ *nvme[0-9]+:/{sub(":","",$1); print $1}')
+GPU_REG=$(pciconf -lc "$GPU_PCI" 2>/dev/null | sed -n 's/.*cap 01\[\([0-9a-f]*\)\].*/\1/p' | head -1)
+[ -n "$GPU_REG" ] && GPU_REG=$(printf '0x%x' $(( 0x$GPU_REG + 4 )))
+
+ts()    { date '+%F %T'; }
+logln() { echo "$(ts) $*" >> "$WD_LOG"; }
+event() { logln "EVENT $*"; logger -t thermal-watchdog -p daemon.notice -- "$*"; }
+msr()   { cpucontrol -m "$1" /dev/cpuctl0 2>/dev/null | awk '{sub(/^0x/,"",$4); print $3 $4}'; }
+core_stats() { sysctl -n $TEMP_OIDS 2>/dev/null | awk '{gsub(/C/,""); s+=$1; if ($1+0>m) m=$1+0} END{printf "%d %d\n", m, (NR ? s/NR : 0)}'; }
+pch_temp()   { sysctl -n dev.pchtherm.0.temperature 2>/dev/null | cut -d. -f1; }
+nvme_temps() { local n; for n in $NVMES; do nvmecontrol logpage -p 2 "$n" 2>/dev/null | awk -F'[ ,]+' '/^Temperature:/{printf "%d ", $2-273; exit}'; done; }
+gpu_state()  { [ -n "$GPU_REG" ] && printf 'D%d' $(( 0x$(pciconf -rh "$GPU_PCI" "$GPU_REG" | tr -d ' ') & 3 )) || printf '?'; }
+gpu_temp()   { # "/NNC" via nvidia-smi only while a process has the GPU open (querying an idle GPU re-initialises it: ~2 s at P0); "/idle" otherwise
+	kldstat -q -n nvidia.ko && [ -x /usr/local/bin/nvidia-smi ] || return 0
+	fstat 2>/dev/null | awk '$5=="/dev" && $8=="nvidia0"{f=1; exit} END{exit !f}' || { printf '/idle'; return 0; }
+	local t; t=$(/usr/local/bin/nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+	case "$t" in ''|*[!0-9]*) printf '/smi-error';; *) printf '/%sC' "$t";; esac
+}
+DBG=/var/run/lindebugfs
+igpu_freq()  { # "/NNNMHz" actual GT frequency from i915 debugfs (lindebugfs mounted on demand), "" without i915kms
+	[ -d "$DBG/dri" ] || { mkdir -p "$DBG" && mount -t lindebugfs lindebugfs "$DBG" 2>/dev/null; }
+	local n; n=$(grep -ls '^i915' "$DBG"/dri/*/name 2>/dev/null | head -1)
+	[ -n "$n" ] && awk -F': *' '/^Actual freq/{printf "/%dMHz", $2+0}' "${n%/name}/i915_frequency_info" 2>/dev/null
+}
+set_ratio()  { "$POLICY" -q set-ratio "$1" 2>>"$WD_LOG"; }
+still_critical() { # core or PCH at/over the critical line right now (NVMe is not re-read: it is slow and idle in S3)
+	set -- $(core_stats); local c=${1:-0} p; p=$(pch_temp); p=${p:-0}
+	[ "$c" -ge "$WD_CORE_CRIT" ] || [ "$p" -ge "$WD_PCH_CRIT" ]
+}
+emergency() {
+	event "CRITICAL: $1 — executing '$WD_ACTION'"
+	logger -t thermal-watchdog -p daemon.crit -- "CRITICAL: $1 — $WD_ACTION"
+	echo "thermal-watchdog: CRITICAL $1 — $WD_ACTION NOW" | wall 2>/dev/null
+	[ -n "$RATIO" ] && set_ratio "$MIN_RATIO"
+	case $WD_ACTION in
+	suspend)
+		# GPU work in flight does not survive S3 (llama-server fence hang, live test 2026-09-12): stop it first, briefly
+		[ -n "$WD_SUSPEND_PRE" ] && { timeout 15 sh -c "$WD_SUSPEND_PRE" >>"$WD_LOG" 2>&1 || logln "suspend pre-hook '$WD_SUSPEND_PRE' failed ($?)"; }
+		# S3 stops every heat source within seconds and keeps the session; the owner resumes with the power
+		# button. Escalation: a helper sleeps WD_SUSPEND_GRACE s of *run time* (sleep(1) counts uptime, which
+		# stands still in S3) — if the box is then still running with a critical sensor (S3 entry refused or
+		# hung, or resumed straight back into the heat), it powers off after all.
+		( sleep "$WD_SUSPEND_GRACE"
+		  if still_critical; then event "CRITICAL ${WD_SUSPEND_GRACE}s after the suspend request — powering off"
+			/sbin/shutdown -p now; fi ) &
+		/usr/sbin/acpiconf -s "$WD_SUSPEND_STATE" >>"$WD_LOG" 2>&1 || logln "acpiconf -s $WD_SUSPEND_STATE failed ($?)"
+		event "back from the suspend request — monitoring continues, cap $(( MIN_RATIO * 100 )) MHz, $(core_stats | cut -d' ' -f1) C core, $(pch_temp) C pch"
+		RATIO=$MIN_RATIO; ccrit=0; ncrit=0; RESUMED=1
+		# e.g. start the job stopped by the pre-hook again (asgard/unstick.sh post-resume); backgrounded, monitoring goes on
+		[ -n "$WD_SUSPEND_POST" ] && { ( sh -c "$WD_SUSPEND_POST" >>"$WD_LOG" 2>&1 || logln "suspend post-hook '$WD_SUSPEND_POST' failed ($?)" ) & }
+		return 0 ;;
+	*)	$WD_ACTION   # power-off: nothing is stopped first
+		exit 0 ;;
+	esac
+}
+
+ESU=$(( ( $(msr 0x606) >> 8 ) & 0x1f )); [ "$ESU" -eq 0 ] && ESU=14
+E_PREV=$(( $(msr 0x611) & 0xffffffff )); G_PREV=$(( $(msr 0x641) & 0xffffffff )); T_PREV=$(date +%s)
+RATIO=$(cat "$RATIO_FILE" 2>/dev/null); [ -n "$RATIO" ] || RATIO=$MAX_RATIO
+tick=0; cool=0; ccrit=0; ncrit=0; nvme_max=0; nvme_str="-"; throttled=0; watts="?"; RESUMED=0
+AC_PREV=$(sysctl -n hw.acpi.acline 2>/dev/null); AC_PREV=${AC_PREV:-1}   # 2026-09-12: AC loss at 23:10:41 went unnoticed for 30 min
+trap 'event "stopping (signal)"; exit 0' TERM INT
+event "started: action='$WD_ACTION', interval ${WD_INTERVAL}s, cap ratio $RATIO (${MAX_RATIO}..${MIN_RATIO}, base ${BASE_RATIO}), core hi/lo ${WD_CORE_HI}/${WD_CORE_LO} C, crit core ${WD_CORE_CRIT} C nvme ${WD_NVME_CRIT} C pch ${WD_PCH_CRIT} C"
+
+while :; do
+	ac=$(sysctl -n hw.acpi.acline 2>/dev/null); ac=${ac:-1}
+	if [ "$ac" != "$AC_PREV" ]; then
+		if [ "$ac" = 0 ]; then event "AC POWER LOST (acline=0, battery $(sysctl -n hw.acpi.battery.life 2>/dev/null)%) - GPU/CPU clocks will be capped, measurements invalid"
+		else event "AC power restored (acline=1)"; fi
+		AC_PREV=$ac
+	fi
+	set -- $(core_stats); cmax=${1:-0}; cavg=${2:-0}
+	pch=$(pch_temp); pch=${pch:-0}
+	if [ $(( tick % WD_NVME_EVERY )) -eq 0 ]; then
+		nvme_str=$(nvme_temps); nvme_max=0
+		for t in $nvme_str; do [ "$t" -gt "$nvme_max" ] && nvme_max=$t; done
+		if [ "$nvme_max" -ge "$WD_NVME_CRIT" ]; then ncrit=$((ncrit + 1)); else ncrit=0; fi
+	fi
+	if [ "$cmax" -ge "$WD_CORE_CRIT" ]; then ccrit=$((ccrit + 1)); else ccrit=0; fi
+	RESUMED=0
+	[ "$ccrit" -ge "$WD_CORE_CRIT_N" ] && emergency "max core ${cmax} C >= ${WD_CORE_CRIT} C for $((ccrit * WD_INTERVAL)) s"
+	[ "$RESUMED" -eq 0 ] && [ "$ncrit" -ge "$WD_NVME_CRIT_N" ] && emergency "NVMe ${nvme_max} C >= ${WD_NVME_CRIT} C for $((ncrit * WD_NVME_EVERY * WD_INTERVAL)) s"
+	[ "$RESUMED" -eq 0 ] && [ "$pch" -ge "$WD_PCH_CRIT" ] && emergency "PCH ${pch} C >= ${WD_PCH_CRIT} C"
+	if [ "$RESUMED" -eq 1 ]; then tick=$((tick + 1)); sleep "$WD_INTERVAL"; continue; fi   # stale readings: re-sample first
+
+	# adaptive frequency cap
+	hot=0
+	[ "$cmax" -ge "$WD_CORE_HI" ] && hot=1
+	[ "$pch" -ge "$WD_PCH_HI" ] && hot=1
+	[ "$nvme_max" -ge "$WD_NVME_HI" ] && hot=1
+	if [ $hot -eq 1 ]; then
+		cool=0
+		if [ "$RATIO" -gt "$MIN_RATIO" ]; then
+			if [ "$RATIO" -gt "$BASE_RATIO" ]; then new=$BASE_RATIO; else new=$(( RATIO - WD_STEP )); fi
+			[ "$cmax" -ge $(( WD_CORE_CRIT - 5 )) ] && new=$MIN_RATIO
+			[ "$new" -lt "$MIN_RATIO" ] && new=$MIN_RATIO
+			RATIO=$new; set_ratio "$RATIO"
+			event "HOT core ${cmax} C pch ${pch} C nvme ${nvme_max} C -> cap $(( RATIO * 100 )) MHz"
+		fi
+	elif [ "$RATIO" -ge "$BASE_RATIO" ] && [ "$MAX_RATIO" -gt "$BASE_RATIO" ]; then
+		# turbo band: target from the hottest core, no turbo while PCH/NVMe are warm
+		if [ "$pch" -ge "$WD_PCH_LO" ] || [ "$nvme_max" -ge "$WD_NVME_LO" ]; then target=$BASE_RATIO
+		elif [ "$cmax" -le "$WD_CORE_LO" ]; then target=$MAX_RATIO
+		else target=$(( MAX_RATIO - (MAX_RATIO - BASE_RATIO) * (cmax - WD_CORE_LO) / (WD_CORE_HI - WD_CORE_LO) )); fi
+		old=$RATIO
+		if [ "$target" -lt "$RATIO" ]; then RATIO=$target
+		elif [ "$target" -gt "$RATIO" ]; then RATIO=$(( RATIO + WD_TURBO_STEP )); [ "$RATIO" -gt "$target" ] && RATIO=$target; fi
+		if [ "$RATIO" -ne "$old" ]; then
+			set_ratio "$RATIO"
+			# log only band entry/exit and >= 400 MHz moves, the 60 s status line has the rest
+			if [ "$RATIO" -eq "$MAX_RATIO" ] || [ "$RATIO" -eq "$BASE_RATIO" ] || [ $(( RATIO - old )) -ge 4 ] || [ $(( old - RATIO )) -ge 4 ]; then
+				event "turbo band core ${cmax} C pch ${pch} C nvme ${nvme_max} C -> cap $(( RATIO * 100 )) MHz"
+			fi
+		fi
+		cool=0
+	elif [ "$cmax" -le "$WD_CORE_LO" ] && [ "$pch" -lt "$WD_PCH_LO" ] && [ "$nvme_max" -lt "$WD_NVME_LO" ]; then
+		cool=$((cool + 1))
+		if [ "$cool" -ge "$WD_UP_AFTER" ] && [ "$RATIO" -lt "$BASE_RATIO" ]; then
+			RATIO=$(( RATIO + WD_STEP )); [ "$RATIO" -gt "$BASE_RATIO" ] && RATIO=$BASE_RATIO
+			set_ratio "$RATIO"; cool=0
+			event "cool core ${cmax} C -> cap $(( RATIO * 100 )) MHz"
+		fi
+	else
+		cool=0
+	fi
+
+	if [ $(( tick % WD_LOG_EVERY )) -eq 0 ]; then
+		e=$(( $(msr 0x611) & 0xffffffff )); g=$(( $(msr 0x641) & 0xffffffff )); now=$(date +%s)
+		d=$(( e - E_PREV )); [ $d -lt 0 ] && d=$(( d + 4294967296 ))
+		dg=$(( g - G_PREV )); [ $dg -lt 0 ] && dg=$(( dg + 4294967296 ))
+		watts=$(awk -v d=$d -v u=$ESU -v t=$(( now - T_PREV )) 'BEGIN{ if (t > 0) printf "%.1f", d / (2^u) / t; else printf "-" }')
+		gwatts=$(awk -v d=$dg -v u=$ESU -v t=$(( now - T_PREV )) 'BEGIN{ if (t > 0) printf "%.1f", d / (2^u) / t; else printf "-" }')
+		E_PREV=$e; G_PREV=$g; T_PREV=$now
+		throttled=$(sysctl -n $THR_OIDS 2>/dev/null | sort -u | tail -1)
+		logln "core=${cmax}/${cavg}C pch=${pch}C nvme=$(echo $nvme_str | tr ' ' '/')C pkg=${watts}W freq=$(sysctl -n dev.cpu.0.freq)MHz cap=$(( RATIO * 100 ))MHz ac=${ac} igpu=${gwatts}W$(igpu_freq) gpu=$(gpu_state)$(gpu_temp) throttled=${throttled:-?}"
+		[ "${throttled:-0}" = 1 ] && sysctl -q $(echo "$THR_OIDS" | sed 's/ /=0 /g') >/dev/null 2>&1
+	fi
+	if [ $tick -gt 0 ] && [ $(( tick % WD_REAPPLY_EVERY )) -eq 0 ]; then
+		"$POLICY" -q apply >>"$WD_LOG" 2>&1 && logln "policy re-applied (cap $(( RATIO * 100 )) MHz)"
+	fi
+	tick=$((tick + 1))
+	sleep "$WD_INTERVAL"
+done

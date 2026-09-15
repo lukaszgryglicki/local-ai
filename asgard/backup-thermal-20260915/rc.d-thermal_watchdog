@@ -1,0 +1,23 @@
+#!/bin/sh
+#
+# PROVIDE: thermal_watchdog
+# REQUIRE: thermal_policy syslogd
+# KEYWORD: nojail shutdown
+#
+# Add to /etc/rc.conf:  thermal_watchdog_enable="YES"
+# Log: /var/log/thermal.log ; config: /usr/local/etc/thermal-policy.conf
+
+. /etc/rc.subr
+
+name=thermal_watchdog
+rcvar=thermal_watchdog_enable
+desc="Thermal watchdog: temperature log, adaptive CPU frequency cap, emergency power-off"
+
+load_rc_config $name
+: ${thermal_watchdog_enable:=NO}
+
+pidfile="/var/run/${name}.pid"
+command="/usr/sbin/daemon"
+command_args="-f -r -R 10 -P ${pidfile} -t ${name} /usr/local/sbin/thermal-watchdog"
+
+run_rc_command "$1"

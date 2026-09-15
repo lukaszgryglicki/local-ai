@@ -1,0 +1,207 @@
+#!/bin/sh
+# thermal-policy — static, conservative thermal/power policy for asgard
+# (Dell Precision 7750, Xeon W-10885M, FreeBSD 15). Replaces the Intel DPTF
+# functionality FreeBSD lacks. Config: /usr/local/etc/thermal-policy.conf
+#
+# usage: thermal-policy [-q] apply | revert | status | temps | set-ratio N
+#   apply      apply everything from the conf (idempotent; run at boot + periodically)
+#   revert     restore Dell/FreeBSD defaults (turbo on, TCC 0, HWP max, GPU D0, NVMe defaults)
+#   status     show current state of every knob
+#   temps      one-line temperature snapshot
+#   set-ratio  set only the HWP max performance ratio (used by thermal-watchdog)
+set -u
+CONF=/usr/local/etc/thermal-policy.conf
+RATIO_FILE=/var/run/thermal-policy.ratio
+DELL_RAPL_DEFAULT=0x0042843800df8258   # PL1 75 W/56 s clamp, PL2 135 W/2.44 ms (BIOS 1.34.0)
+NVME_HCTM_DEFAULT=0x015d0160           # TMT1 76 C / TMT2 79 C (KC3000 FW EIFK51.2)
+
+CX_LOWEST=Cmax; EPP=100; TURBO_DISABLE=yes; TCC_OFFSET=10; MAX_RATIO=24; MIN_RATIO=12
+RAPL_ENABLE=yes; RAPL_PL1_W=35; RAPL_PL2_W=45
+GPU_D3HOT=yes; GPU_PCI=pci0:1:0:0
+NVME_HCTM=yes; NVME_TMT1_C=70; NVME_TMT2_C=77
+NVME_APST=yes; NVME_APST_IDLE_MS=2000; NVME_APST_PS=3
+[ -r "$CONF" ] && . "$CONF"
+
+QUIET=no
+while getopts q opt; do case $opt in q) QUIET=yes;; *) exit 64;; esac; done
+shift $((OPTIND - 1))
+CMD=${1:-status}
+
+log()  { [ "$QUIET" = yes ] || echo "$*"; }
+warn() { echo "WARN: $*" >&2; }
+die()  { echo "ERROR: $*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die "must run as root"
+kldload -n cpuctl coretemp 2>/dev/null || warn "kldload cpuctl/coretemp failed"
+CPUCTLS=$(ls /dev/cpuctl* 2>/dev/null) || die "no /dev/cpuctl*"
+NCPU=$(sysctl -n hw.ncpu)
+
+hex64()  { printf '0x%016x' "$1"; }
+msr_rd() { cpucontrol -m "$1" "${2:-/dev/cpuctl0}" | awk '{sub(/^0x/,"",$4); print $3 $4}'; }
+msr_wr_all() { local d; for d in $CPUCTLS; do cpucontrol -m "$1=$2" "$d" || warn "wrmsr $1 failed on $d"; done; }
+le_bytes() { # value nbytes -> printf format of \ooo escapes, little-endian
+	local v=$1 n=$2 s= i=0
+	while [ $i -lt $n ]; do s="$s\\$(printf '%03o' $(( v & 0xff )))"; v=$(( v >> 8 )); i=$((i+1)); done
+	printf '%s' "$s"
+}
+nvme_list() { nvmecontrol devlist 2>/dev/null | awk '/^ *nvme[0-9]+:/{sub(":","",$1); print $1}'; }
+each_cpu()  { local i=0; while [ $i -lt $NCPU ]; do sysctl -q "$(printf "$1" $i)" >/dev/null 2>&1; i=$((i+1)); done; }
+
+# --- CPU ---------------------------------------------------------------------
+do_cstates() {
+	sysctl -q hw.acpi.cpu.cx_lowest="$CX_LOWEST" >/dev/null || warn "cx_lowest"
+	log "C-states     : cx_lowest=$(sysctl -n hw.acpi.cpu.cx_lowest) (usage cpu0: $(sysctl -n dev.cpu.0.cx_usage | cut -d' ' -f1-3))"
+}
+do_epp() {
+	each_cpu "dev.hwpstate_intel.%d.epp=$EPP"
+	log "Speed Shift  : EPP=$(sysctl -n dev.hwpstate_intel.0.epp) (0=performance .. 100=efficiency)"
+}
+do_turbo() {
+	local d v
+	for d in $CPUCTLS; do
+		if [ "$TURBO_DISABLE" = yes ]; then cpucontrol -m '0x1a0|=0x4000000000' "$d"
+		else v=$(msr_rd 0x1a0 "$d"); cpucontrol -m 0x1a0="$(hex64 $(( v & ~(1 << 38) )))" "$d"; fi
+	done
+	v=$(msr_rd 0x1a0)
+	log "Turbo Boost  : $([ $(( (v >> 38) & 1 )) -eq 1 ] && echo DISABLED || echo enabled) (MISC_ENABLE bit 38)"
+}
+do_tcc() {
+	local v
+	v=$(msr_rd 0x1a2)
+	msr_wr_all 0x1a2 "$(hex64 $(( (v & ~(0x3f << 24)) | ((TCC_OFFSET & 0x3f) << 24) )))"
+	v=$(msr_rd 0x1a2)
+	log "TCC offset   : $(( (v >> 24) & 0x3f )) -> PROCHOT/throttle at $(( ((v >> 16) & 0xff) - ((v >> 24) & 0x3f) )) C (Tjmax $(( (v >> 16) & 0xff )) C)"
+}
+do_hwp() { # [ratio]
+	local caps hi lo ratio eppraw
+	[ "$(msr_rd 0x770)" = "$(hex64 1)" ] || { warn "HWP not enabled, skipping ratio cap"; return 0; }
+	ratio=${1:-}
+	[ -z "$ratio" ] && [ -r "$RATIO_FILE" ] && ratio=$(cat "$RATIO_FILE")
+	[ -z "$ratio" ] && ratio=$MAX_RATIO
+	caps=$(msr_rd 0x771); hi=$(( caps & 0xff )); lo=$(( (caps >> 24) & 0xff ))
+	[ "$ratio" -gt "$hi" ] && ratio=$hi
+	[ "$ratio" -lt "$lo" ] && ratio=$lo
+	eppraw=$(( 255 * EPP / 100 ))
+	msr_wr_all 0x774 "$(hex64 $(( (eppraw << 24) | (ratio << 8) | lo )))"
+	echo "$ratio" > "$RATIO_FILE"
+	log "HWP max ratio: $ratio (= $(( ratio * 100 )) MHz) [caps: highest $hi, guaranteed $(( (caps >> 8) & 0xff )), lowest $lo]"
+}
+rapl_desc() { # value
+	printf 'PL1 %s W%s / PL2 %s W%s' $(( ($1 & 0x7fff) / 8 )) "$([ $(( ($1 >> 15) & 1 )) -eq 1 ] || printf ' (off)')" \
+	    $(( (($1 >> 32) & 0x7fff) / 8 )) "$([ $(( ($1 >> 47) & 1 )) -eq 1 ] || printf ' (off)')"
+}
+mchbar_rapl_addr() {
+	local mch
+	mch=$(pciconf -r pci0:0:0:0 0x48 2>/dev/null | tr -d ' ')
+	case $mch in ""|*[!0-9a-fA-F]*) return 1;; esac
+	[ $(( 0x$mch & 1 )) -eq 1 ] || return 1
+	echo $(( (0x$mch & 0xffff8000) + 0x59a0 ))
+}
+mmio_rd64() { dd if=/dev/mem bs=8 count=1 iseek=$(( $1 / 8 )) status=none 2>/dev/null | od -An -tx8 | tr -d ' \n' | sed 's/^/0x/'; }
+do_rapl() { # [value]  (default: from conf)
+	local cur new addr mmio
+	[ "$RAPL_ENABLE" = yes ] || [ -n "${1:-}" ] || return 0
+	cur=$(msr_rd 0x610)
+	if [ -n "${1:-}" ]; then new=$1
+	else new=$(( (cur & ~(0x7fff | (0x7fff << 32))) | (RAPL_PL1_W * 8) | ((RAPL_PL2_W * 8) << 32) )); fi
+	msr_wr_all 0x610 "$(hex64 $new)"
+	if addr=$(mchbar_rapl_addr); then
+		mmio=$(mmio_rd64 "$addr")
+		# only touch MMIO if it really mirrors the RAPL MSR
+		if [ $(( mmio )) -eq $(( cur )) ] || [ $(( mmio )) -eq $(( new )) ]; then
+			printf "$(le_bytes $new 8)" | dd of=/dev/mem bs=8 count=1 oseek=$(( addr / 8 )) conv=notrunc status=none
+		else warn "MCHBAR+0x59a0 ($mmio) != MSR 0x610 ($cur); MMIO RAPL not written"; fi
+	fi
+	log "RAPL         : $(rapl_desc $(msr_rd 0x610)) [MSR]$(addr=$(mchbar_rapl_addr) && printf ' %s [MMIO]' "$(rapl_desc $(mmio_rd64 $addr))") — NOTE: ignored by this Dell PCU"
+}
+# --- GPU ---------------------------------------------------------------------
+gpu_pmcsr() { # -> register offset of PMCSR or empty
+	local off
+	off=$(pciconf -lc "$GPU_PCI" 2>/dev/null | sed -n 's/.*cap 01\[\([0-9a-f]*\)\].*/\1/p' | head -1)
+	[ -n "$off" ] && printf '0x%x' $(( 0x$off + 4 ))
+}
+do_gpu() { # [0|3]
+	local want reg cur
+	if kldstat -q -n nvidia.ko; then
+		log "GPU $GPU_PCI: nvidia driver loaded, power state left to the driver"; return 0
+	fi
+	want=${1:-3}; [ "$GPU_D3HOT" = yes ] || [ -n "${1:-}" ] || want=0
+	reg=$(gpu_pmcsr) || { warn "$GPU_PCI: no PCI PM capability"; return 0; }
+	cur=$(pciconf -rh "$GPU_PCI" "$reg" | tr -d ' ')
+	[ $(( 0x$cur & 3 )) -eq "$want" ] || pciconf -wh "$GPU_PCI" "$reg" "$(printf '0x%04x' $(( (0x$cur & ~3) | want )))"
+	cur=$(pciconf -rh "$GPU_PCI" "$reg" | tr -d ' ')
+	log "GPU $GPU_PCI: D$(( 0x$cur & 3 ))$([ $(( 0x$cur & 3 )) -eq 3 ] && printf ' (hot, powered down)') PMCSR=0x$cur"
+}
+# --- NVMe ---------------------------------------------------------------------
+do_nvme_hctm() { # [raw cdw11]
+	local n v st
+	[ "$NVME_HCTM" = yes ] || [ -n "${1:-}" ] || return 0
+	v=${1:-$(( ((NVME_TMT1_C + 273) << 16) | (NVME_TMT2_C + 273) ))}
+	for n in $(nvme_list); do
+		# NB: nvmecontrol exits 74 if stdout is /dev/null -> capture output instead
+		st=$(nvmecontrol admin-passthru --opcode=0x09 --cdw10=0x10 --cdw11=$v "$n" 2>&1) || warn "$n: HCTM set failed: $st"
+		st=$(nvmecontrol admin-passthru --opcode=0x0a --cdw10=0x10 "$n" 2>/dev/null | awk '{print $NF}')
+		log "$n HCTM     : light throttle >= $(( (st >> 16) - 273 )) C, heavy >= $(( (st & 0xffff) - 273 )) C"
+	done
+}
+do_nvme_apst() { # [0|1]
+	local n en f i st
+	en=${1:-}; [ -z "$en" ] && { [ "$NVME_APST" = yes ] && en=1 || en=0; }
+	f=$(mktemp -t apst) || return 1
+	i=0
+	while [ $i -lt 32 ]; do   # 32 x 8-byte entries; PS0..PS(n-1) -> PS n after idle ms
+		if [ $en -eq 1 ] && [ $i -lt "$NVME_APST_PS" ]; then
+			printf "$(le_bytes $(( (NVME_APST_IDLE_MS << 8) | (NVME_APST_PS << 3) )) 4)\000\000\000\000" >> "$f"
+		else printf '\000\000\000\000\000\000\000\000' >> "$f"; fi
+		i=$((i + 1))
+	done
+	for n in $(nvme_list); do
+		st=$(nvmecontrol admin-passthru --opcode=0x09 --cdw10=0x0c --cdw11=$en --data-len=256 --write --input-file="$f" "$n" 2>&1) || warn "$n: APST set failed: $st"
+		st=$(nvmecontrol admin-passthru --opcode=0x0a --cdw10=0x0c "$n" 2>/dev/null | awk '{print $NF}')
+		log "$n APST     : $([ $(( st & 1 )) -eq 1 ] && echo "enabled (PS0-$(( NVME_APST_PS - 1 )) -> PS$NVME_APST_PS after $NVME_APST_IDLE_MS ms idle)" || echo disabled)"
+	done
+	rm -f "$f"
+}
+# --- reports ---------------------------------------------------------------------
+temps() {
+	local cores pch nv n gpu reg
+	cores=$(sysctl -n $(i=0; while [ $i -lt $NCPU ]; do printf 'dev.cpu.%d.temperature ' $i; i=$((i+1)); done) 2>/dev/null | awk '{gsub(/C/,""); s+=$1; if ($1+0>m) m=$1+0} END{printf "max %d C avg %d C", m, (NR ? s/NR : 0)}')
+	pch=$(sysctl -n dev.pchtherm.0.temperature 2>/dev/null | tr -d C)
+	nv=$(for n in $(nvme_list); do nvmecontrol logpage -p 2 "$n" 2>/dev/null | awk -F'[ ,]+' -v n="$n" '/^Temperature:/{printf "%s %d C  ", n, $2-273; exit}'; done)
+	reg=$(gpu_pmcsr) && gpu="D$(( 0x$(pciconf -rh "$GPU_PCI" "$reg" | tr -d ' ') & 3 ))" || gpu="?"
+	echo "cores $cores | freq $(sysctl -n dev.cpu.0.freq) MHz | PCH ${pch:-?} C | ${nv}| GPU $gpu | throttled: $(sysctl -n $(i=0; while [ $i -lt $NCPU ]; do printf 'dev.cpu.%d.coretemp.throttle_log ' $i; i=$((i+1)); done) 2>/dev/null | sort -u | tail -1)"
+}
+status() {
+	local v caps
+	echo "thermal-policy status ($(hostname), $(date '+%F %T'))"
+	echo "C-states     : cx_lowest=$(sysctl -n hw.acpi.cpu.cx_lowest) (cpu0 usage $(sysctl -n dev.cpu.0.cx_usage | cut -d' ' -f1-3))"
+	echo "Speed Shift  : EPP=$(sysctl -n dev.hwpstate_intel.0.epp)"
+	v=$(msr_rd 0x1a0); echo "Turbo Boost  : $([ $(( (v >> 38) & 1 )) -eq 1 ] && echo DISABLED || echo enabled)"
+	v=$(msr_rd 0x1a2); echo "TCC offset   : $(( (v >> 24) & 0x3f )) -> throttle at $(( ((v >> 16) & 0xff) - ((v >> 24) & 0x3f) )) C"
+	v=$(msr_rd 0x774); caps=$(msr_rd 0x771)
+	echo "HWP request  : max ratio $(( (v >> 8) & 0xff )) (= $(( ((v >> 8) & 0xff) * 100 )) MHz), min $(( v & 0xff )), EPP raw $(( (v >> 24) & 0xff )) [caps highest $(( caps & 0xff )) guaranteed $(( (caps >> 8) & 0xff ))]"
+	echo "RAPL         : $(rapl_desc $(msr_rd 0x610)) [MSR] (ignored by this PCU)"
+	if v=$(gpu_pmcsr); then v=$(pciconf -rh "$GPU_PCI" "$v" | tr -d ' '); echo "GPU $GPU_PCI: D$(( 0x$v & 3 )) PMCSR=0x$v"; else echo "GPU $GPU_PCI: no PM capability"; fi
+	for n in $(nvme_list); do
+		v=$(nvmecontrol admin-passthru --opcode=0x0a --cdw10=0x10 "$n" 2>/dev/null | awk '{print $NF}')
+		printf '%s        : HCTM %d/%d C, APST %s\n' "$n" $(( (v >> 16) - 273 )) $(( (v & 0xffff) - 273 )) \
+		    "$([ $(( $(nvmecontrol admin-passthru --opcode=0x0a --cdw10=0x0c "$n" 2>/dev/null | awk '{print $NF}') & 1 )) -eq 1 ] && echo on || echo off)"
+	done
+	echo "Temps        : $(temps)"
+}
+
+case $CMD in
+apply)
+	do_cstates; do_epp; do_turbo; do_tcc; do_hwp; do_rapl; do_gpu; do_nvme_hctm; do_nvme_apst
+	each_cpu 'dev.cpu.%d.coretemp.throttle_log=0'
+	log "applied $(date '+%F %T')";;
+revert)
+	TURBO_DISABLE=no; TCC_OFFSET=0; EPP=50
+	do_epp; do_turbo; do_tcc; rm -f "$RATIO_FILE"; do_hwp 255
+	do_rapl $DELL_RAPL_DEFAULT; do_gpu 0; do_nvme_hctm $NVME_HCTM_DEFAULT; do_nvme_apst 0
+	log "reverted to Dell/FreeBSD defaults (cx_lowest left at $(sysctl -n hw.acpi.cpu.cx_lowest))";;
+set-ratio) [ -n "${2:-}" ] || die "set-ratio N"; do_hwp "$2";;
+status) status;;
+temps) temps;;
+*) die "usage: thermal-policy [-q] apply|revert|status|temps|set-ratio N";;
+esac

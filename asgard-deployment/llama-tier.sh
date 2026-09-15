@@ -107,13 +107,19 @@ do_start() {
   [ -f "$OUT" ] && mv "$OUT" "$OUT.prev"
   note "START llama-$TIER ($PROFILE: $TITLE) ctx=$CTX ncmoe=$NCMOE threads=$THREADS/$TBATCH kv=$KV batch=$BATCH/$UBATCH${ROPE:+ $ROPE}"
   t0=$(date +%s)
+  # --load-mode none = read() the model into RAM (no mmap; ~60 GiB of experts land in Vulkan pinned host memory).
+  # --lazy-mode off  = 15 Sep 2026: llama.cpp's default 'auto' maps tensors flagged TENSOR_READ_LAZY anyway and fetches
+  #   their rows from disk per token — for Qwen3.8-Flash-Next that is per_layer_token_embd.weight (26.8 GiB, IQ4_NL):
+  #   38 page faults/s in decode, 229/s in prefill, each a 128 KB record from all 4 NVMe (models dataset is
+  #   primarycache=metadata) -> steady disk traffic that kept the PCH/NVMe links awake (see asgard/ops.md 15 Sep).
+  #   'off' keeps the table resident (+27 GiB RAM, we have 128) -> zero model IO after the load.
   # shellcheck disable=SC2086
   GGML_VK_VISIBLE_DEVICES=0 daemon -f -p "$PIDF" -o "$OUT" "$BIN" --model "$MODELS/$MODEL" --alias "$ALIAS,qwen3coder-local" \
     --host "$HOST" --port "$PORT" \
     --ctx-size "$CTX" --parallel "$NP" --gpu-layers 99 --device Vulkan0 --fit off $NCMOE_ARGS $ROPE \
     --flash-attn on --cache-type-k "$KV" --cache-type-v "$KV" --cache-ram "$CACHE_RAM" \
     --batch-size "$BATCH" --ubatch-size "$UBATCH" --threads "$THREADS" --threads-batch "$TBATCH" \
-    --load-mode none --ctx-checkpoints 8 --no-warmup \
+    --load-mode none --lazy-mode off --ctx-checkpoints 8 --no-warmup \
     --spec-type "$SPEC" \
     --jinja --reasoning on --reasoning-budget -1 --chat-template-kwargs "$KWARGS" $EFFORT_ARGS \
     --temp "$TEMP" --top-p "$TOP_P" --top-k "$TOP_K" --min-p "$MIN_P" --repeat-penalty 1.0 \

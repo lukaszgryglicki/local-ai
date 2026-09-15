@@ -1,0 +1,2 @@
+thermal_policy_enable="YES"
+thermal_watchdog_enable="YES"

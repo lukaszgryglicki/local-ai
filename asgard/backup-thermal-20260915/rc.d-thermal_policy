@@ -1,0 +1,32 @@
+#!/bin/sh
+#
+# PROVIDE: thermal_policy
+# REQUIRE: kld sysctl
+# BEFORE: LOGIN
+# KEYWORD: nojail
+#
+# Add to /etc/rc.conf:  thermal_policy_enable="YES"
+# Config: /usr/local/etc/thermal-policy.conf ; extra commands: status, revert
+
+. /etc/rc.subr
+
+name=thermal_policy
+rcvar=thermal_policy_enable
+desc="Apply conservative CPU/GPU/NVMe thermal policy (no Intel DPTF on FreeBSD)"
+
+load_rc_config $name
+: ${thermal_policy_enable:=NO}
+
+start_cmd="${name}_start"
+stop_cmd=":"
+status_cmd="/usr/local/sbin/thermal-policy status"
+extra_commands="status revert"
+revert_cmd="/usr/local/sbin/thermal-policy revert"
+
+thermal_policy_start()
+{
+	echo "Applying thermal policy."
+	/usr/local/sbin/thermal-policy -q apply
+}
+
+run_rc_command "$1"

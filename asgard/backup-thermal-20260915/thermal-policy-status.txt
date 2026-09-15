@@ -1,0 +1,13 @@
+thermal-policy status (asgard, 2026-09-15 14:51:08)
+C-states     : cx_lowest=C8 (cpu0 usage 6.68% 36.85% 56.45%)
+Speed Shift  : EPP=100
+Turbo Boost  : enabled
+TCC offset   : 10 -> throttle at 90 C
+HWP request  : max ratio 53 (= 5300 MHz), min 1, EPP raw 255 [caps highest 53 guaranteed 24]
+RAPL         : PL1 35 W / PL2 45 W [MSR] (ignored by this PCU)
+GPU pci0:1:0:0: D0 PMCSR=0x0008
+nvme0        : HCTM 70/77 C, APST on
+nvme1        : HCTM 70/77 C, APST on
+nvme2        : HCTM 70/77 C, APST on
+nvme3        : HCTM 70/77 C, APST on
+Temps        : cores max 51 C avg 49 C | freq 4401 MHz | PCH 73.0 C | nvme0 39 C  nvme1 38 C  nvme2 39 C  nvme3 52 C  | GPU D0 | throttled: 0

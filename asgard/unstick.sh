@@ -70,6 +70,8 @@ EOF
 )"
   [ -n "${RUNS:-}" ] || RUNS=$HOME_/local-ai-runs
   if [ "$(cat "$RUNS/llama.pid" 2>/dev/null)" = "$1" ]; then HOW=start.sh; else HOW=relaunch; fi
+  # 2026-09-15: the daily-use rc.d services (asgard-deployment/llama-tier.sh) keep their pid in $RUNS/llama-tN.pid
+  for t in t0 t1 t2; do [ "$(cat "$RUNS/llama-$t.pid" 2>/dev/null)" = "$1" ] && HOW=service:$t; done
 }
 terminate() {   # $1 = pid, $2 = seconds of grace after TERM before KILL; prints what happened
   kill -TERM "$1" 2>/dev/null; i=0
@@ -81,6 +83,10 @@ bring_back() {   # uses HOW USER_ RUNS LAUNCHER D
   case $HOW in
     start.sh) out=$(as_user "rm -f '$RUNS/llama.pid'; LOCAL_AI_RUNS='$RUNS' '$d/start.sh' --last" 2>&1); rc=$?
               logln "$(now) start.sh --last as $USER_ (rc $rc): $(echo "$out" | grep -E 'UP in|EXITED|replaying|already' | tr '\n' ' ')"
+              [ "$rc" = 0 ] || printf '%s\n' "$out" | as_user "tee -a '$D/unstick.log'" >/dev/null; return $rc ;;
+    service:*) tier=${HOW#service:}; svc="service llama-$tier start"; [ "$(id -u)" = 0 ] || svc="sudo -n $svc"
+              out=$($svc 2>&1); rc=$?
+              logln "$(now) $svc (rc $rc): $(echo "$out" | grep -E 'UP in|EXITED|already|missing|listens' | tr '\n' ' ' | cut -c1-300)"
               [ "$rc" = 0 ] || printf '%s\n' "$out" | as_user "tee -a '$D/unstick.log'" >/dev/null; return $rc ;;
     relaunch) as_user "daemon -f -p '$D/relaunch.pid' -o '${LAUNCHER%.sh}.out' sh '$LAUNCHER'"
               while :; do curl -s -m 2 "$u/health" 2>/dev/null | grep -q '"ok"' && break
@@ -112,7 +118,7 @@ case $MODE in
   watch) while :; do fix; sleep "${2:-30}"; done ;;
   show) p=$(server_pid); [ -n "$p" ] || { echo "no server on :$PORT"; exit 0; }; capture "$p"
         echo "llama-server pid $p, user $USER_, cwd $CWD, started via $HOW, log ${LOGFILE:-?}"
-        echo "restart would be: $( [ "$HOW" = start.sh ] && echo "start.sh --last ($(tr '\n' ' ' < "$RUNS/last-start.env"))" || echo "identical relaunch")"
+        echo "restart would be: $( case $HOW in start.sh) echo "start.sh --last ($(tr '\n' ' ' < "$RUNS/last-start.env"))";; service:*) echo "service llama-${HOW#service:} start";; *) echo "identical relaunch";; esac )"
         echo "launcher: $LAUNCHER"; sed -n '3,$p' "$LAUNCHER" | tr -s ' ' | fold -w 160 | head -12 ;;
   restart)
     p=$(server_pid); [ -n "$p" ] || { echo "$(now) restart: no server on :$PORT"; exit 0; }

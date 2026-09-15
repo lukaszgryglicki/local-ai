@@ -57,7 +57,7 @@ exec "$B" --model "$d/../models/$MODEL_FILE" --alias "$MODEL_ALIAS,qwen3coder-lo
   --ctx-size "$CTX" --parallel "$NP" --gpu-layers 99 --device "$DEV" --fit off $IGPU_ARGS $NCMOE_ARGS \
   --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --cache-ram "$MODEL_CACHE_RAM" \
   --batch-size 2048 --ubatch-size 1024 --threads "${THREADS:-${MODEL_THREADS:-8}}" --threads-batch "${THREADS_BATCH:-16}" \
-  --load-mode none --ctx-checkpoints 8 --no-warmup \
+  --load-mode none --lazy-mode off --ctx-checkpoints 8 --no-warmup \
   --spec-type "${SPEC:-$MODEL_SPEC}" --spec-draft-n-max 6 --spec-draft-p-min 0.75 \
   --spec-draft-type-k "${DRAFT_KV:-q8_0}" --spec-draft-type-v "${DRAFT_KV:-q8_0}" \
   --jinja --reasoning on --reasoning-budget -1 $KW_ARGS \
