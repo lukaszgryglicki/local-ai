@@ -4,7 +4,7 @@
 # the research phase only this file (and start.sh / serve.sh / models.sh behind it) changes; it is never in the boot
 # sequence (rc.d KEYWORD nostart). Always runs as SERVICE_USER: invoked as root it re-executes itself via su -l.
 #   start [MODEL]  MODEL given (qwen35b = frozen T0 winner, also as profile vram|t0|fastest-vram = the winning knobs pinned; T1 candidates
-#                  qwen35b-q4 (T1 winner) | flashnext|qwen122b|qwen122b-iq4 (T2); asgard/models.sh) -> asgard/start.sh MODEL with that model's
+#                  qwen35b-q4 (T1 winner, profile fast|t1) | flashnext (T2 winner, profile best|t2); asgard/models.sh) -> asgard/start.sh MODEL with that model's
 #                  defaults (NP=1, ctx 262144, per-model spec/cache-ram); knobs (NP= CTX= SPEC= NCMOE= IGPU_MOE= ...)
 #                  pass through the environment when run as the user, e.g. NP=2 ./llamactl.sh start qwen35b
 #                  no MODEL -> replay the last start, whoever made it (start.sh --last, ~/local-ai-runs/last-start.env),

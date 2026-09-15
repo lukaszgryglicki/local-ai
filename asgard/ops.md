@@ -514,6 +514,11 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
 - 15 Sep 10:24 — chain 3 `qwen122b-iq4` rust run 2: **PASS 5/5** in 1 213 s (20 min), 14 turns, tg 3.4 t/s → §3.4 row. go run 2 running
   since 10:25 (last chain-3 task).
 
+- 15 Sep 11:06 — chain 3 `qwen122b-iq4` go run 2: **FAIL-task 4/5** (comparisons 46/47, `bufio.Scanner` 64 KiB again, main.go l.81) in
+  1 893 s (32 min), 14 turns, tg 4.0 t/s, 77.1 % acceptance → §3.4 row + phase-A2 tally table. **Chain 3 DONE 11:08:11**
+  (`pincheck-t2chain3-end` 15.10 t/s PINNED, `T2_CHAIN3_DONE`). Final T2 tally: flashnext 0 / iq4 2 / qwen122b 3 functional failures
+  in 5 runs each. No server running; GPU pinned (a reboot un-pins it). Next: §4 verdict, `best|t2` freeze, report-t2.md §5–10.
+
 ## 7. At the real end (when the research phase is over)
 
 - Boot start: remove `nostart` from the `KEYWORD` line of `asgard/rc.d/llama`, reinstall the stub

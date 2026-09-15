@@ -6,7 +6,7 @@
 # so ../qwen.sh, ../health.sh, ../copilot.sh work unchanged on asgard; asgard/qwen.sh adds
 # --no-warmup (14 Sep 12:10): llama-server's warm-up decodes with ALL experts active = the largest possible idle-to-full step on a
 # partial-offload model; AC drop #6 (11:53:16) hit exactly that moment. start.sh/ramp.py ramp the load instead (results-t1.md §6.2).
-# per-model sampling. MODEL = qwen35b (T0 winner = `fastest-vram`, default) | qwen35b-q4 (T1 winner = `fast`) | flashnext | qwen122b | qwen122b-iq4 (T2 candidates); asgard/models.sh.
+# per-model sampling. MODEL = qwen35b (T0 winner = `fastest-vram`, default) | qwen35b-q4 (T1 winner = `fast`) | flashnext (T2 winner = `best`); asgard/models.sh.
 # Env overrides: NP slots (default 1; ctx = NP x 256K unless CTX given), CTX, THREADS (models.sh MODEL_THREADS, else 8),
 # THREADS_BATCH (16), NCMOE (--n-cpu-moe, default per model), SPEC (--spec-type, default per
 # model; SPEC=none for raw decode speed), DRAFT_KV (KV type of the MTP draft context, default q8_0; with f16 the

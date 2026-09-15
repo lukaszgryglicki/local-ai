@@ -11,6 +11,11 @@
 # T1 is FROZEN (14 Sep 2026 07:20): qwen35b-q4 is the `fast` profile (results-t1.md §6, quality-first). The other T1 candidates
 # (kat-q4 = KAT-Coder-V2.5-Dev Q4_K_L 20.3 GiB, qwen35b-q8 = Qwen3.6-35B-A3B Q8_0 34.4 GiB) were removed on 14 Sep 11:50 on the
 # owner's instruction - GGUFs deleted, entries dropped from this file; settings/results live in git history and results-t1.md §4-§6.
+# T2 is FROZEN (15 Sep 2026 11:15): flashnext is the `best` profile (results-t2.md §4, quality-first: 0 functional failures in 5 E2E
+# runs vs 3 / 2 for the Qwen3.5-122B files). The other T2 candidates (qwen122b = Qwen3.5-122B-A10B UD-Q4_K_XL 73.3 GiB, qwen122b-iq4 =
+# UD-IQ4_XS 57.7 GiB, both MTP files from unsloth/Qwen3.5-122B-A10B-MTP-GGUF @ 907becb3) were removed on 15 Sep 11:15 on the owner's
+# instruction - GGUFs + models/.verified markers deleted, entries dropped from this file; settings/results live in git history and
+# results-t2.md §0-§4 (their E2E projects stay under /data/ai/*-task-qwen122b*). Disk now holds exactly the T0, T1 and T2 winners.
 # Files live in ../models/ (gitignored) on the zroot/data/local-ai dataset (compression=off,
 # primarycache=metadata, recordsize=128K - see readme "ZFS: why the model has its own dataset"; `all` from 11 Sep was reverted
 # 13 Sep 01:05 and vfs.zfs.arc.max=16 GiB went into /etc/sysctl.conf: an unlimited ARC starves the NVIDIA pinned host
@@ -24,7 +29,7 @@
 # `MODEL=fastest-vram ./qwen.sh` keep working unchanged when later tiers change the plain defaults of serve.sh/start.sh:
 #   vram | t0 | fastest-vram  -> qwen35b, SPEC=none NP=1 CTX=262144 NCMOE=0 IGPU_MOE=0 THREADS=8 THREADS_BATCH=16 (frozen 13 Sep 2026)
 #   fast | t1                 -> qwen35b-q4, SPEC=none NP=1 CTX=262144 NCMOE=20 IGPU_MOE=0 THREADS=8 THREADS_BATCH=16 (frozen 14 Sep 2026, results-t1.md §6)
-#   best | t2                 -> not frozen yet (T2 in progress: flashnext / qwen122b / qwen122b-iq4, results-t2.md)
+#   best | t2                 -> flashnext, SPEC=none NP=1 CTX=262144 NCMOE=47 IGPU_MOE=0 THREADS=16 THREADS_BATCH=16 (frozen 15 Sep 2026, results-t2.md §4)
 model_env() {
   MODEL_PROFILE=
   case "$1" in
@@ -34,7 +39,9 @@ model_env() {
     fast|t1) MODEL_PROFILE=fast; set -- qwen35b-q4   # T1 winner by coding quality (results-t1.md §6, 14 Sep 2026): rust 4/5 (spec-only), go 5/5, c 5/5
       NP=${NP:-1} CTX=${CTX:-262144} SPEC=${SPEC:-none} NCMOE=${NCMOE:-20} IGPU_MOE=${IGPU_MOE:-0} THREADS=${THREADS:-8} THREADS_BATCH=${THREADS_BATCH:-16}
       export NP CTX SPEC NCMOE IGPU_MOE THREADS THREADS_BATCH ;;
-    best|t2) echo "profile '$1' is not frozen yet (T2 = results-t2.md in progress) - name a model instead" >&2; return 1 ;;
+    best|t2) MODEL_PROFILE=best; set -- flashnext   # T2 winner by coding quality (results-t2.md §4, 15 Sep 2026): rust 5/5 x2, go 5/5, c 5/5 - 0 functional failures
+      NP=${NP:-1} CTX=${CTX:-262144} SPEC=${SPEC:-none} NCMOE=${NCMOE:-47} IGPU_MOE=${IGPU_MOE:-0} THREADS=${THREADS:-16} THREADS_BATCH=${THREADS_BATCH:-16}
+      export NP CTX SPEC NCMOE IGPU_MOE THREADS THREADS_BATCH ;;
   esac
   MODEL_NAME=$1 MODEL_DIR= MODEL_EXTRA= MODEL_BIN= MODEL_THREADS=   # MODEL_THREADS = per-model --threads default (env THREADS wins; serve.sh falls back to 8); MODEL_BIN = llama-server binary if not build-vulkan-2 (serve.sh); MODEL_DIR = repo sub-folder of sharded files; MODEL_EXTRA = 'shard:bytes:sha256 ...' beyond MODEL_FILE (shard 1, the one llama-server opens)
   case "$1" in
@@ -50,29 +57,15 @@ model_env() {
       MODEL_BYTES=22360456160 MODEL_SHA256=707a55a8a4397ecde44de0c499d3e68c1ad1d240d1da65826b4949d1043f4450
       MODEL_SPEC=none MODEL_CACHE_RAM=8192 MODEL_NCMOE=20 MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}'
       MODEL_TEMP=1.0 MODEL_TOP_P=0.95 MODEL_TOP_K=20 MODEL_MIN_P=0.0 ;;     # NCMOE=20 = fit ladder 12 Sep (15 144 MiB; k=18 UP but 500 on 1st decode)
-    flashnext) # T2 "best" candidate: Qwen3.8-Flash-Next 125B-A6B (+51B n-gram table, MTP), UD-IQ4_XS, 3 shards = 87.3 GiB; needs llama.cpp >= b10889 (plan §4 T3 row)
+    flashnext) # T2 WINNER = `best` (frozen 15 Sep): Qwen3.8-Flash-Next 125B-A6B (+51B n-gram table; this UD-IQ4_XS file has NO MTP layers -> SPEC=none), 3 shards = 87.3 GiB; needs llama.cpp >= b10889 (plan §4 T3 row)
       MODEL_DIR=UD-IQ4_XS MODEL_FILE=Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf MODEL_ALIAS=qwen3.8-flash-next MODEL_TITLE='Qwen3.8-Flash-Next UD-IQ4_XS'
       MODEL_REPO=unsloth/Qwen3.8-Flash-Next-GGUF MODEL_REV=38bb39ee97821de2c9009abb7e93950eec396e66
       MODEL_BYTES=10946624 MODEL_SHA256=5ce89370720f8bf90890f439361282104c1aa1482d4013bb9a50923e758e71a4
       MODEL_EXTRA='Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf:49835229856:577a38a2392b40ca2193cea502e1d92f60b8cd370675d308e0ec21885d9daaa7 Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf:43836407744:d4634e6d84f0ebb0940be15c90d3790bf6464e3dea3a1cddc567dc0e83ad8833'
-      MODEL_SPEC=none MODEL_CACHE_RAM=8192 MODEL_NCMOE=all MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}'
+      MODEL_SPEC=none MODEL_CACHE_RAM=8192 MODEL_NCMOE=47 MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}'
       MODEL_BIN=/data/ai/local-agent-poc/src/llama.cpp-master/build-vulkan-master/bin/llama-server   # arch needs master >= b10889 (build-vulkan-master.sh)
-      MODEL_THREADS=16   # +23 % tg at depth 64 / +13 % at 4096 vs 8 threads (pinned, 14 Sep results-t2.md §2.5) - the 51B n-gram table is CPU work; the qwen122b files lose with 16
-      MODEL_TEMP=1.0 MODEL_TOP_P=0.95 MODEL_TOP_K=20 MODEL_MIN_P=0.0 ;;     # NCMOE=all until the fit ladder; sampling = Qwen thinking defaults until the card is checked
-    qwen122b) # T2 "best" candidate: Qwen3.5-122B-A10B (MTP head), UD-Q4_K_XL, 3 shards = 73.3 GiB (plan §4 T4 row)
-      MODEL_DIR=UD-Q4_K_XL MODEL_FILE=Qwen3.5-122B-A10B-UD-Q4_K_XL-00001-of-00003.gguf MODEL_ALIAS=qwen3.5-122b-a10b MODEL_TITLE='Qwen3.5-122B-A10B UD-Q4_K_XL (MTP)'
-      MODEL_REPO=unsloth/Qwen3.5-122B-A10B-MTP-GGUF MODEL_REV=907becb33103ab66b23da06a2dc74a5fca0583bd
-      MODEL_BYTES=10943808 MODEL_SHA256=2faef922e80dcb9558c5a358510244a7c0bb96868b974a359dac87ce52a84316
-      MODEL_EXTRA='Qwen3.5-122B-A10B-UD-Q4_K_XL-00002-of-00003.gguf:49667346080:874d464b62303257a152c15a3c813f65c56957eb6cf19f8ed596668235a53164 Qwen3.5-122B-A10B-UD-Q4_K_XL-00003-of-00003.gguf:28968190016:1e37527ef0e3edbbbe605956752e1be4f4bdbe4ae104701146bb33afed14244a'
-      MODEL_SPEC=draft-mtp,ngram-mod MODEL_CACHE_RAM=8192 MODEL_NCMOE=all MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}'
-      MODEL_TEMP=1.0 MODEL_TOP_P=0.95 MODEL_TOP_K=20 MODEL_MIN_P=0.0 ;;     # Qwen3.5 thinking-mode card values; NCMOE=all until the fit ladder
-    qwen122b-iq4) # T2 speed alternative of qwen122b: UD-IQ4_XS, 3 shards = 57.7 GiB
-      MODEL_DIR=UD-IQ4_XS MODEL_FILE=Qwen3.5-122B-A10B-UD-IQ4_XS-00001-of-00003.gguf MODEL_ALIAS=qwen3.5-122b-a10b-iq4 MODEL_TITLE='Qwen3.5-122B-A10B UD-IQ4_XS (MTP)'
-      MODEL_REPO=unsloth/Qwen3.5-122B-A10B-MTP-GGUF MODEL_REV=907becb33103ab66b23da06a2dc74a5fca0583bd
-      MODEL_BYTES=10943808 MODEL_SHA256=d312417f4a5ef36ddaffcc4bbdcc47817d0c7bd27f917fa3235ad90b4805c17a
-      MODEL_EXTRA='Qwen3.5-122B-A10B-UD-IQ4_XS-00002-of-00003.gguf:49754258240:5d414ef4dd2b8c73780bafa6b47deb5f5d70ecfa804a785f3b1d98a9084310de Qwen3.5-122B-A10B-UD-IQ4_XS-00003-of-00003.gguf:12162581376:d9ac8af93d3818980762fdfb18d4ff30415d37233acba156995bfb816819bcf9'
-      MODEL_SPEC=draft-mtp,ngram-mod MODEL_CACHE_RAM=8192 MODEL_NCMOE=all MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}'
-      MODEL_TEMP=1.0 MODEL_TOP_P=0.95 MODEL_TOP_K=20 MODEL_MIN_P=0.0 ;;
-    *) echo "unknown model '$1' (profiles: vram|t0|fastest-vram = qwen35b  fast|t1 = qwen35b-q4 (T1 winner; kat-q4/qwen35b-q8 removed 14 Sep)  T2 candidates: flashnext|qwen122b|qwen122b-iq4)" >&2; return 1 ;;
+      MODEL_THREADS=16   # +23 % tg at depth 64 / +13 % at 4096 vs 8 threads (pinned, 14 Sep results-t2.md §2.5) - the 51B n-gram table is CPU work (T1's 35B MoE gained nothing from 16; the 122B files were not swept at 16)
+      MODEL_TEMP=1.0 MODEL_TOP_P=0.95 MODEL_TOP_K=20 MODEL_MIN_P=0.0 ;;     # NCMOE=47 = fit ladder 14 Sep (§2.2/§2.5: expert blocks 0-46 in RAM, blocks 47+48 in VRAM, 13 926 MiB after load, 14.2 GiB peak in the E2E); sampling = Qwen thinking-mode card values; reasoning_effort stays at the template default xhigh (medium/low = speed levers, never needed)
+    *) echo "unknown model '$1' (profiles: vram|t0|fastest-vram = qwen35b  fast|t1 = qwen35b-q4 (T1 winner; kat-q4/qwen35b-q8 removed 14 Sep)  best|t2 = flashnext (T2 winner; qwen122b/qwen122b-iq4 removed 15 Sep))" >&2; return 1 ;;
   esac
 }

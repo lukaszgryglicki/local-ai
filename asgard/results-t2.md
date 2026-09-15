@@ -496,4 +496,14 @@ run-1 go was FAIL-infra on the unit-test check. Run-1 projects are kept as `/dat
 | **`qwen122b`** k=47 MTP | rust (run 2) | 883 s (15 min; 11 turns, 26K ctx, tg 3.6 t/s, 58.8 % acceptance, 1.5K generated) | **PASS 5/5** (18/18 round-trips) | **PASS-score** | Reads all of stdin this time — run 1's `read_line` first-line-only slip did not recur (1 of 2 rust runs functional-failed). The tersest run of the whole T2 set: 1.5K generated tokens |
 | `qwen122b` k=47 MTP | go (run 2) | 1 560 s (26 min; 13 turns, 30K ctx, tg 4.2 t/s, 70.2 % acceptance) | 4/5 (build ✓ vet ✓ test ✓ nodeps ✓, **comparisons 46/47**) | **FAIL-task-score** | **The identical `bufio.NewScanner(os.Stdin)` 64 KiB bug as run 1** (no `scanner.Buffer()`, 6 MB single line → rc=1). Reproducible, not noise: `qwen122b` is **0 for 2 on go**, and the failure is a specific blind spot (line-oriented stdin reading with the default Scanner limit) rather than a random slip |
 | **`qwen122b-iq4`** k=47 MTP | rust (run 2) | 1 213 s (20 min; 14 turns, 28K ctx, tg 3.4 t/s, 59.1 % acceptance) | **PASS 5/5** (18/18 round-trips) | **PASS-score** | 2 for 2 on rust (run 1: 16 min PASS) |
-| `qwen122b-iq4` k=47 MTP | go (run 2) | running 10:25 → | | | |
+| `qwen122b-iq4` k=47 MTP | go (run 2) | 1 893 s (32 min; 14 turns, 30K ctx, tg 4.0 t/s aggregate, 77.1 % acceptance, 5.0K generated) | 4/5 (build ✓ vet ✓ test ✓ nodeps ✓, **comparisons 46/47**) | **FAIL-task-score** | The identical `bufio.NewScanner(os.Stdin)` 64 KiB bug (main.go l.81, no `Buffer()`): the 6 MB single-line input → rc=1, empty output. Both 122B files are **0 for 2 on go**; all four Qwen3.5-122B go runs failed the same way. |
+
+**Phase A2 summary — final quality tally, 5 runs per model (rust ×2, go ×2, c ×1), functional failures only:**
+
+| model | rust | go | c | functional failures / 5 runs | wall of the 5 runs |
+|---|---|---|---|---|---|
+| **`flashnext`** | PASS, PASS | (run 1 FAIL-infra, 47/47 functional) PASS | PASS | **0** | 32 + 37 + 79 + 463 min (+64 cut) |
+| `qwen122b-iq4` | PASS, PASS | 4/5, 4/5 | PASS | **2** | 16 + 20 + 34 + 32 + 141 min |
+| `qwen122b` | 4/5, PASS | 4/5, 4/5 | PASS | **3** | 17 + 15 + 31 + 26 + 98 min |
+
+The 122B go failure is deterministic across four runs at the card's temperature (default `bufio.Scanner` 64 KiB token limit vs the 6 MB single-line input; the T0/T1 35B files and flashnext all read stdin whole) — a reproducible blind spot, not sampling noise. **Chain 3 DONE 11:08:11** (`pincheck-t2chain3-end` 15.10 t/s PINNED, `T2_CHAIN3_DONE`). Verdict → §4.
