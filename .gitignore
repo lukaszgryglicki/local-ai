@@ -6,4 +6,3 @@ __pycache__/
 models/
 *.part
 tmp/
-models.old/

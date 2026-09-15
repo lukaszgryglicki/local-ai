@@ -98,6 +98,17 @@ At CRITICAL (core ≥ 98 °C for 3 ticks, NVMe ≥ 87 °C for 2, PCH ≥ 115 °C
 
 With `WD_ACTION="/sbin/shutdown -p now"` nothing is stopped first — the power-off is immediate.
 
+**PCH policy since 15 Sep 15:19** (owner-authorised; backup of conf/watchdog/rc.d/rc.conf/ratio/status/log in
+`asgard/backup-thermal-20260915/` and `~/local-ai-runs/backup-thermal-20260915/`, revert = `cp -p` back + `service thermal_policy start;
+service thermal_watchdog restart`). `WD_PCH_LO` 90 → **98** (forced BASE 2400 MHz), `WD_PCH_HI` 100 → **104** (HOT → −200 MHz/tick to 1200),
+new `WD_PCH_STOP=106` × `WD_PCH_STOP_N=2` ticks → `WD_PCH_STOP_HOOK` = `unstick.sh pre-suspend` (stops the llama job, state file), and
+`WD_PCH_RESUME_HOOK` = `unstick.sh post-resume` once the PCH is `< WD_PCH_LO` for 60 s (the state file says how to bring it back);
+`WD_PCH_CRIT` 115 unchanged. `unstick.sh` learned the `service:tN` provenance (`~/local-ai-runs/llama-tN.pid`) → `service llama-tN start`
+(`sudo -n` when not root); `show` prints it. Why: both 15 Sep runaways (74 → 108 and 73 → 105 °C) happened with the CPU already capped
+1200–2400 and cores 46–52 °C — CPU caps do not cool the PCH; only stopping the job did (−15 °C/min). Verified 15:19: thermal.log
+`started: … pch hi/lo 104/98 C stop 106 C (hook set)`, `unstick.sh show` → `restart would be: service llama-t2 start`. The hook path itself
+has not fired live yet (the 15:22–15:35 run stayed ≤ 93 °C).
+
 Verified: mock run 08:16 (acpiconf/shutdown/wall/logger/set_ratio stubbed, thresholds forced) — order `CRITICAL →
 pre-hook → acpiconf → back → post-hook`; a 40 s pre-hook cut at 15 s (`failed (124)`) with S3 still proceeding; a
 power-off action running no hook. Real stop/start cycle of the hooks on the live server: §6.
@@ -137,6 +148,8 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
 | 11:45 | `service llama status` → `restart` → `stop` → `status`, hand-started server | status: "started by hand, no pidfile" + argv; restart: identical relaunch, TERM 2.1 s, UP in 6 s (8.4 s total); stop: "stopped pid … listening on :18080 (started by hand)", VRAM 0; status: "not running (no live pid …, nothing listening on :18080)" |
 | 11:46 | `service llama start` (no MODEL) → `start` again → `restart` → `unstick.sh check`, `start.sh` provenance | start: replayed `qwen9b NP=1`, UP in 6 s; second start: "already running: pid … via start.sh"; restart: stop.sh + replay, 9.1 s total, pidfile updated; check: ok |
 | 12:21 | **llama-server SIGABRT mid-task** (qwen9b asm, ~99K ctx) — not stuck, not thermal | abort text lost (no `daemon -o`, `kern.coredump=0`) → `start.sh` now logs stderr to `~/local-ai-runs/serve.out` and archives old logs in `~/local-ai-runs/logs/`; nobody restarted it (by design: only hung servers were replaced) → `e2e-test.sh` now restarts a vanished server once per resume via `start.sh --last`, task-time only; hand restart 12:34:20, session resumed by the harness 12:34:29 |
+| 15 Sep 15:19 | watchdog + conf + `unstick.sh` patched (§3 PCH policy), `service thermal_watchdog restart` | thermal.log `started: … pch hi/lo 104/98 C stop 106 C (hook set)`; `unstick.sh show` on the live service → `started via service:t2 … restart would be: service llama-t2 start` |
+| 15 Sep 15:41 | `temp.sh` rewrite (§8.4) run without a client; `gpu_pin llama-server` branch sourced alone | `boost-lock: PINNED (AC dropped 1x this boot, last 15:14:49 …)`; client branch prints the counter-0 variant, no shell errors |
 | 12:43 | **second SIGABRT** 9 min after the restart, first request after a 130K re-encode — `serve.out` caught it: `vk::Device::allocateMemory: ErrorOutOfDeviceMemory`, `Memory allocation of size 269924352 failed`, in `create_checkpoint` → `update_dft` → `state_seq_get_data` (Vulkan staging buffer for a 131 799-token f16 draft-KV slice) | root cause proven with a Vulkan probe: the NVIDIA FreeBSD driver rejects any **single host-visible allocation ≥ 256 MiB** (255 ok, total unlimited); no runtime knob exists (device-buffer knobs only, upstream master unchunked). Hand restart 13:06:2x `NP=1 GGML_VK_ALLOW_SYSMEM_FALLBACK=1 ./start.sh qwen9b`, harness resumed 13:06:28 (downtime 1 381 s, excluded). Flag is not on that code path, so its "success" is coincidence; kept only for this run |
 | 13:10 | `serve.sh`: `DRAFT_KV=q8_0` default (`--spec-draft-type-k/-v`, 1 088 B/token → cap ≈ 247K tokens; `q4_0` clears 262K); `start.sh --last` persists `DRAFT_KV` and `GGML_VK_ALLOW_SYSMEM_FALLBACK` | takes effect at the next server start (pid 87550 still runs f16 draft KV) |
 | 13:40 | `patches/0001-vulkan-chunk-staging-transfers.patch` (chunked `ggml_vk_buffer_read/_write`, ≤ 64 MiB pieces, `GGML_VK_STAGING_CHUNK_MB`) applied to `/data/ai/local-agent-poc/src/llama.cpp` (working tree, not built); `build-vulkan-2.sh` builds it into `build-vulkan-2/` | build + validation (`GGML_VULKAN_MEMORY_DEBUG=1`, > 131K-token checkpoint scenario, f16 draft KV, flag unset) only when no E2E task runs; then `serve.sh B=` → `build-vulkan-2/bin`, keep `build-vulkan` as fallback |
@@ -577,3 +590,113 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   rc.d script carrying `KEYWORD: suspend resume` was built and removed on 2026-09-12 — `unstick.sh pre-suspend` /
   `post-resume` are reusable as-is; note rc.subr only runs such hooks for an *enabled* rcvar).
 - `health.sh` could get a `--no-completion` mode; until then `llamactl.sh status` is the safe probe.
+
+## 8. 15 Sep afternoon — the un-pinned T2 attempt: PCH runaways, the lazy PLE table, datasets, the pin explained
+
+### 8.1 Timeline (CEST)
+
+| when | what |
+|---|---|
+| 13:58 | owner: `sudo service llama-t2 start` un-pinned (UP 47 s, VRAM 14 191 MiB, brake counter 0); hello-world pp 78.7 / tg 4.9 t/s |
+| 14:12:22 | `e2e-all.sh flashnext asm` on the service (`E2E_UNSTICK=0 E2E_CAP=28800`, `last-start.env` → `.hold`), telemetry GUARD_PCH=108 |
+| 14:19–14:30 | **PCH runaway #1** 74 → 108 °C while the watchdog capped the CPU 2400 → 1200 (cores 46–52 °C); guard `stop.sh` 14:30:05, KILL after 30 s |
+| 14:41 / 14:42:54 | service restarted (pid 48353) / harness auto-resumed (`qwen -r`); ARC max 2 → 16 GiB (owner) |
+| 14:44–14:53:30 | re-prefill 82 077 tokens in 607 s = **135 t/s**: GPU 99 %, 80–116 W, SM ≤ 1860; CPU idle (pkg 4–9 W); PCH 69–73 °C flat |
+| 14:53:37–14:56:58 | decode **tg 5.5–5.9 t/s** (pinned reference 3.3), 16 threads 3.6–4.8 GHz, cores 62–69 °C; PCH 73–74 °C flat; NVMe 37/36/38/51 |
+| 14:56:58–14:59:18 | **runaway #2**: PCH 74 → 81 → 89 (BASE 2400 at 14:57:41) → 95 → 101 → 105 while **all four NVMe rose +14 °C in step** at constant IO/CPU/GPU load; guard (GUARD_PCH=104) 14:59:18, KILL after 30 s; PCH 105 → 82 in 2 min once the job was dead |
+| 15:00–15:14 | datasets restructured (§8.3); watchdog backup |
+| 15:14:0x → 15:14:49 | `service llama-t2 start` (pid 42326) → **AC drop #9** at the first ramp step (`acpi_acad0: Off Line` 15:14:49, `On Line` 15:14:56) → **GPU pinned** |
+| 15:15:13 → 15:34 | harness resumed; ramp 4096 step 98 t/s (was 260); re-prefill **44 t/s** (was 135) — 49 875 of 83K tokens after 1 127 s; PCH 71–74 |
+| 15:19 | watchdog PCH policy live (§3); 15:21 telemetry relaunched GUARD_PCH=108 |
+| 15:20 | `rm -rf models.old`: the block-clone free wrote 70–164 MB/10 s for 40 s → PCH 71 → 84 °C; 15:22 dtrace attribution (§8.2) |
+| 15:29 | operator's recursive grep touched `models/` (750 MB/s reads, one core) → **PCH 73 → 93 °C in 30 s**; killed; 85 °C a minute later |
+| 15:35 | run aborted: harness/qwen killed, `service llama-t2 stop` (TERM ignored 30 s → KILL, third time today), VRAM 0 |
+| 15:40–15:55 | `temp.sh` gpu_pin fixed (§8.4); `--lazy-mode off` in all launchers; GPU compute-only probe |
+| 15:54:02–15:55:08 | owner unplugged the adapter for 66 s (deliberate, **not** a trip — `acpi_acad0` shows it as event #10 this boot); probe 15:57: still pinned (§8.4) |
+| 16:02–16:07 | telemetry/pchwatch stopped; `zroot/data/local-ai` folded into a plain directory (§8.3); `~/local-ai-runs` → `/data/local-ai/tmp/runs` + relative symlink; `last-start.env` restored; `/etc/sysctl.conf` ARC comment refreshed |
+| 16:06 → 16:08:48 | `shutdown -p now` (operator) → owner powered on; watchdog up at boot, ARC max 16 GiB, datasets mounted, runs symlink OK |
+| 16:09:31–16:10:03 | compute-only probe: **un-pinned** — 1200–1905 MHz, up to 107.9 W (limit 110 W), HW brake 0 µs, SW cap only at the 110 W ceiling |
+| 16:10:43 → 16:11:49 | `service llama-t2 start` (pid 86085), UP in 66 s; model read 87 GB from NVMe in ~45 s → **PCH 66 → 87 °C** (GPU idle 15 W meanwhile) |
+| **16:11:52–16:11:54** | **AC drop #11** at the first ramp step (3 s after UP; CPU at 998 MHz, cores 44 °C, PCH 87 → 78) → pinned again; brake counter 88 s after one minute of ramp |
+| 16:13 | lazy verified: 0 gguf mappings, `v_vnodepgsin` +0/10 s, wired 93.8 GiB, no "lazy" in the server log |
+| 16:14 | **owner: "pinned is the reality — do NOT power off; settle everything and let T2 do the asm task, measure as before"** |
+| 16:16:03 | `e2e-all.sh flashnext asm` launched on the pinned service (E2E_CAP 8 h, lazy off, watchdog hook live); prefill GPU 99 % at 1035 MHz / 56 W, CPU 900 MHz, PCH 67 °C |
+
+### 8.2 The steady disk-read stream under load = llama.cpp's lazy per-layer-embedding table
+
+Symptom: with the T2 server busy, `zpool iostat` showed 5–9 MB/s reads at ~65 IOPS of 128 KB; `kstat.zfs.misc.arcstats.demand_data_misses`
+≈ `vm.stats.vm.v_vnodein` ≈ `v_vnodepgsin` (+38/s in decode, +229/s in prefill, 0 with the server dead) = one-page mmap faults, each
+pulling a whole 128 KB record from all four NVMe because the dataset is `primarycache=metadata`. `top -m io` attributes faults to
+`llama-server` (FAULT 14.5 M). dtrace (`/tmp/pfault.d`, `fbt::zfs_freebsd_getpages:entry` by execname/pid/mountpoint, 20 s):
+`llama-server 42326 /data/local-ai/models 4575 calls 4575 pages`. `procstat -v` showed all three shards mapped (87 GiB of VA, 1 GiB resident
+in shard 2) although the service runs `--load-mode none`.
+
+Cause (llama.cpp master, `src/llama-model-loader.cpp` 1337/1405/1633, `src/models/qwen4exp.cpp` 188): `--lazy-mode` (default `auto`)
+maps tensors flagged `TENSOR_READ_LAZY` **whatever the load mode** and reads their rows from disk on demand — `auto` = only tensors
+> 4 GiB. For Qwen3.8-Flash-Next that is `per_layer_token_embd.weight`: IQ4_NL, 160 × 320 001 536, **26.8 GiB**, in shard 2. Every token
+needs its rows → page faults → NVMe reads for the whole run (the PLE rows for a token are contiguous, so one record per token in
+the ideal case; we saw ~7 faults/token because the ARC keeps no data for `models/`).
+
+Fix (owner: "load the full model into RAM — period", 15:50): `--lazy-mode off` next to `--load-mode none` in
+`asgard-deployment/llama-tier.sh` (shared exec line, all tiers), `asgard/serve.sh` (research harness) and `serve.sh`; both binaries
+(`build-vulkan-2` 5266f24 for T0/T1, `build-vulkan-master` 790cf51aa for T2) list the option. Cost: the table becomes resident
+(+27 GiB; T2 ≈ 60 GiB experts in Vulkan pinned host memory + 27 GiB table + ~2 GiB other CPU tensors ≈ 89 GiB of 128, ARC 16 GiB).
+Verify at the next start: `grep lazy ~/local-ai-runs/llama-t2.out` empty, `procstat -v PID | grep -c gguf` = 0, `sysctl
+vm.stats.vm.v_vnodepgsin` flat under load, `zpool iostat 5` ≈ 0 reads in decode. T0/T1 models (qwen3moe) have no lazy tensors — the flag
+is there for intent.
+
+### 8.3 Datasets — final layout (owner's rule: special datasets only for what llama/qwen read or write)
+
+| dataset → mount | compression | primarycache | recordsize | sync | atime | purpose |
+|---|---|---|---|---|---|---|
+| `zroot/data` → `/data/local-ai/` (plain directory after the 15 Sep fold) | zstd-13 (pool) | all | 128K | standard | off | the git repo, scripts, docs, secrets — nothing special |
+| `zroot/data/local-ai-models` → `/data/local-ai/models` | **off** (gguf incompressible) | **metadata** (read once per start with `--load-mode none --lazy-mode off`; no second copy in the ARC) | 1M (future files; the cloned files keep their 128K blocks) | standard | off | the three tier models, 119 GiB |
+| `zroot/data/local-ai-tmp` → `/data/local-ai/tmp` | lz4 (free, logs shrink 5–10×) | all | 128K | **disabled** (async logs; a crash loses ≤ 5 s) | off | `runs/` = the former `~/local-ai-runs` (llama logs, pidfiles, telemetry CSV, `qwen-home/` = qwen-code's HOME); gitignored |
+
+How it was done (15:00–15:14, server down): `zfs create -o mountpoint=/data/local-ai/models.new -o compression=off -o atime=off
+-o primarycache=metadata -o recordsize=1M zroot/data/local-ai-models`; `cp -Rp models/. models.new/` took 1 s — FreeBSD 15.1's `cp` uses
+`copy_file_range` → **BRT block clone** (pool ALLOC stayed 288 G; `bcloneused` oddly reports 0), contents verified (sizes, head/tail 16 MiB
+`cmp`, sha256 of the small shard); `mv models models.old; zfs set mountpoint=/data/local-ai/models zroot/data/local-ai-models`;
+`zfs inherit primarycache zroot/data/local-ai; zfs inherit compression zroot/data/local-ai`; `zfs create -o mountpoint=/data/local-ai/tmp
+-o compression=lz4 -o sync=disabled -o atime=off zroot/data/local-ai-tmp`; `.gitignore` += `tmp/`. 15:20 `rm -rf models.old` (nothing
+had it open, the service had loaded from the new mount). The fold of `zroot/data/local-ai` itself (7 MB) needs nobody inside it
+(owner's shell cwd, his `temp.sh -w` loop) → done right before the power-off: unmount `tmp` + `models`, `cp -Rp` the tree to
+`/data/local-ai.new`, `zfs unmount -f` + `zfs destroy zroot/data/local-ai`, `mv` back, `zfs mount -a`. Note: recordsize is a *maximum*
+(small files use one block rounded to 4K/ashift) — 128K on the repo is right; 4K would only hurt.
+
+### 8.4 The GPU pin, explained with numbers (why `temp.sh` says PINNED although SM > 1035 MHz shows up)
+
+- Same job, same GPU temperatures (48–70 °C): before AC drop #9 the 82K-token prefill ran 135 t/s at 80–116 W (SM ≤ 1860); after it
+  44 t/s at ≤ 57 W (SM mostly 1035); the 4096-token ramp step 260 → 98 t/s. `nvidia-smi -q -d PERFORMANCE` in that session: **HW Power
+  Braking 1 068 947 967 µs** (1069 s of the ~1500 s session = 71 % duty) — the EC drives the GPU's hardware power-brake pin most of the
+  time under load; the remaining 29 % explain the 1440–1875 MHz samples in `telemetry.csv`. It is **not** a clock latch.
+- Compute-only probe with the model unloaded (15:52, `test-backend-ops perf -b Vulkan0 -o MUL_MAT`): 360–1035 MHz, 33–69 W, **SW Power
+  Cap: Active**, GPU 40–50 °C, no thermal reasons → the driver's power limit itself is now ≈ 65 W (un-pinned it allowed 116 W). So the
+  "pin" = the platform (EC/BIOS via the ACPI power-budget notification + the brake pin) derating the GPU after an AC-loss event and
+  keeping the derated budget until a cold power-off. Trigger: the adapter dropping out for 7 s at the first GPU power step (over-current
+  hiccup; 9 of ~11 first partial-offload prefills). **Adapter re-plug does not clear it** (owner, 15:54:02–15:55:08 unplugged 66 s at
+  idle; probe 15:57: 360–1035 MHz, 41–66 W, SW Power Cap active 16 of 30 s, GPU 43–52 °C — the same as before). Structural
+  counter-measures: a 240 W adapter if the current one is 180 W; the BIOS Peak-Shift/battery-assist options.
+- Drop #11 (16:11:52, fresh cold boot) refines the trigger: it fired 3 s after UP at the **first** ramp step with the CPU at ~1 GHz and
+  cores at 44 °C, right after the 87 GB model read — so neither CPU power nor GPU temperature is the co-factor (results-t1.md §6.2 already
+  measured 13–30 W package power at earlier trips; the RAPL PL1/PL2 limits are "ignored by this PCU"). The compute-only probe two minutes
+  earlier drew 108 W without tripping — the difference is the T2 process: ~80 GiB of Vulkan **pinned host memory** mapped, so the first GPU
+  step also starts PCIe DMA of expert weights over the x16 link at full power. That is the T1/T2 signature (T0 all-VRAM never trips).
+  Owner's decision 16:14: pinned is the operating regime, no more power-offs.
+- `temp.sh` (`asgard/temp.sh`, canonical; `/data/scripts/temp.sh` → symlink; `~/asgard-cfg/thermal/temp.sh` on asgard and tuxi synced):
+  `gpu_pin` now reads the brake counter twice (asserted *now* vs earlier), prints duty % of the client's session age, and only says
+  `none` when the counter is 0 **and** a boost > 1035 MHz was seen; with an AC drop this boot and an unreadable counter it says
+  `probably PINNED`. Verified 15:41 without a client (verdict from the AC-drop count) and with the client branch exercised in isolation.
+
+### 8.5 What heats the PCH (Comet Lake WM490, `dev.pchtherm.0`), from today's data
+
+- **Traffic through it** heats it within seconds: 750 MB/s NVMe reads → +20 °C in 30 s (15:29); 8 MB/s of free-writes → +13 °C in 40 s
+  (15:20); the lazy-table faults kept all four NVMe links and DMI awake for hours (§8.2) — gone with `--lazy-mode off`.
+- **Airflow** decides the rest: runaway #2 started 3.5 min into a steady decode with PCH *and* all four NVMe rising together at
+  constant load — the EC's fan curve follows CPU/GPU temperatures, the PCH has no say; CPU caps make the fans slower, not the PCH
+  cooler. Hence the watchdog now stops the job at 106 °C instead of capping harder, and the BIOS "Ultra Performance" thermal mode is the
+  thing to try. `nvme3` (pci0:113) is the PCH's neighbour: PCH −30 °C, always ~13 °C hotter than nvme0–2.
+- The watchdog's 5-s ticks are fast enough (PCH +10 °C in 5 s was the worst slope seen); the guard in `telemetry.sh` (GUARD_PCH=108) is
+  the last resort behind the watchdog's 106 °C hook.
+- llama-server (master) ignores SIGTERM for > 30 s while a slot is busy (3 of 3 stops today ended in KILL) — a KILL under GPU load is
+  harmless for the box but loses the slot's context; nothing to fix in our scripts, the 30 s grace in `stop.sh` / `llama-tier.sh` stays.

@@ -508,6 +508,32 @@ run-1 go was FAIL-infra on the unit-test check. Run-1 projects are kept as `/dat
 
 The 122B go failure is deterministic across four runs at the card's temperature (default `bufio.Scanner` 64 KiB token limit vs the 6 MB single-line input; the T0/T1 35B files and flashnext all read stdin whole) — a reproducible blind spot, not sampling noise. **Chain 3 DONE 11:08:11** (`pincheck-t2chain3-end` 15.10 t/s PINNED, `T2_CHAIN3_DONE`). Verdict → §4.
 
+### 3.5 Phase C — asm task, first **un-pinned** attempt (15 Sep 14:12–15:35, rc.d `llama-t2`, cap 8 h) — **FAIL-infra**, speed rows kept
+
+Owner's request: run the 4th task with the GPU un-pinned (his 13:58 `service llama-t2 start` did not trip the adapter) and record
+everything as usual plus the un-pinned note. What happened (ops.md §8.1): PCH runaway #1 → guard kill 14:30; restart + resume 14:41;
+decode ran un-pinned 14:53–14:59 until PCH runaway #2 → guard kill 14:59; the 15:14 restart tripped the adapter (AC drop #9) → GPU
+pinned → run aborted 15:35 (no `summary.txt`; the qwen session `c5393819…` had produced 1 725 tokens of reasoning, no code yet). Root
+causes fixed since: the lazy 26.8 GiB PLE table (`--lazy-mode off`), watchdog PCH policy 98/104/106 + stop/resume hook. The cold
+power-off 16:06 gave an un-pinned GPU for exactly one minute: the first ramp step of the 16:10 `llama-t2` start tripped the adapter
+again (drop #11, 16:11:52). Owner 16:14: pinned is the regime → the asm task runs pinned (second part of this section, below).
+
+| regime | phase | measured | note |
+|---|---|---|---|
+| **un-pinned** | re-prefill of the resumed session | **82 077 tokens in 607.5 s = 135.1 t/s** (`prompt eval time`), progress steps 138–151 t/s | GPU 99 %, 80–116 W, SM ≤ 1860; CPU idle (pkg 4–9 W): the experts stream from pinned host RAM to the GPU |
+| **un-pinned** | soft-start ramp 4096-token step | 260 t/s (15.8 s) | 13:58 owner's start: 266 t/s |
+| **un-pinned** | decode (tg, 1 725 tokens, 5.7 min) | **5.5–5.9 t/s** (`tg` 5.60–5.87, `tg_3s` 3.3 at the end under the 1200 MHz cap) | 16 threads 3.6–4.8 GHz, cores 62–69 °C; GPU 25–40 %, 63–88 W |
+| pinned (after drop #9) | ramp 4096-token step | 98 t/s (41.6 s) | brake counter 1069 s, SW Power Cap ≈ 65 W |
+| pinned | re-prefill (same session, 83K tokens) | 44.2–44.6 t/s at 49 875 tokens after 1 127 s (aborted) | would have taken ≈ 31 min instead of 10 |
+| pinned reference | decode | 3.3 / 2.8 bench, 3.0 codebench (§2.5, §3.2) | — |
+
+Un-pinned/pinned factors for the T2 class, first real numbers: **×3.1 prefill (long prompt), ×2.7 short-prompt pp, ×1.7–1.8 tg** — the tg
+factor matches the §6.1 estimate (×1.3–1.8), pp is far above it (the GPU does the prefill work; decode is CPU-expert-bound).
+
+**Second attempt — pinned, `--lazy-mode off`, rc.d `llama-t2` pid 86085, launched 16:16:03, cap 8 h** (`e2e-all.sh flashnext asm`,
+`E2E_UNSTICK=0`, watchdog PCH 98/104/106 + hook, telemetry GUARD_PCH=108). Start conditions: PCH 67 °C, GPU 38 °C, wired 93.8 GiB (PLE
+table resident, 0 gguf mappings → no model-file reads during the run). *Result rows follow when the run ends.*
+
 ## 4. T2 verdict — `flashnext` frozen (15 Sep 11:20)
 
 **Winner by the owner's rule (coding output quality first, speed second): `flashnext` = Qwen3.8-Flash-Next UD-IQ4_XS**, k=47 (experts of
