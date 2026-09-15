@@ -1,13 +1,13 @@
 # asgard T2 report — the `best` profile (2026-09-13 → 2026-09-15)
 
-> **DRAFT (15 Sep, chain 3 running)** — §1–4 and §7 are final; §5, §6, §8–10 are filled in when the second rust/go sample
-> (`t2-chain3.sh`) has finished. `STATUS.md` says what is running; `results-t2.md` has every number.
+> **FINAL (15 Sep 12:15)** — the second rust/go sample (`t2-chain3.sh`) finished 11:08, the decision is in §6, the frozen configuration
+> in §8. `STATUS.md` is the restart sheet; `results-t2.md` has every number; daily use: `../asgard-deployment/README.md`.
 
-**Result so far:** the c task (the hard one of the four) is **PASS 5/5 for both Qwen3.5-122B quantisations** — the first T2
-result that beats the T0 winner (4/5) and equals the T1 winner — while on the two short tasks the 122B model made "reads only the
-first line / 64 KiB of stdin" slips that the 35B models did not (qwen122b 2, iq4 1 functional failures out of 2; flashnext 0).
-Pinned-regime output speed on real coding prompts: `qwen122b` **4.3 t/s**, `qwen122b-iq4` 3.5, `flashnext` 3.0 (T2 goal ≥ 1.8,
-ideal > 3 — all three clear it *even pinned*). The winner is decided by coding quality (owner's rule), speed second; see §6.
+**Result:** **`flashnext` (Qwen3.8-Flash-Next UD-IQ4_XS) is the T2 `best` profile** — the only candidate with **0 functional failures in
+5 coding runs** (rust ×2, go ×2, c). Both Qwen3.5-122B quantisations failed the go task in 4 of 4 runs on the same bug (`bufio.Scanner`
+64 KiB default vs a 6 MB line) and `qwen122b` also mis-read stdin in one rust run (3 and 2 failures). Speed with the GPU pinned (the T2
+operating regime with this adapter): flashnext **3.0 t/s** on real coding prompts (2.5–2.7 in the E2E runs), iq4 3.5, qwen122b 4.3 — all
+above the T2 goal (≥ 1.8, ideal > 3). Frozen 15 Sep 11:20; the 122B files were deleted on the owner's order; `sudo service llama-t2 start`.
 
 This is the consolidated report. The chronological working log with every number, log excerpt and dead end is
 `results-t2.md`; the T0/T1 reports and logs are `report-t0.md`, `results-t0.md`, `results-t1.md`; the plan is `plan.md`; how
@@ -92,11 +92,33 @@ used VRAM + pinned host RAM only.
 
 ## 5. Results per model
 
-*(filled in after chain 3 — see results-t2.md §3.1 run-1/run-2 rows, §3.2, §3.3)*
+Five E2E coding runs per model (`e2e-test.sh` + `scoreboard.py`, temperature 1.0, GPU pinned, run-1 projects kept as
+`/data/ai/TASK-task-MODEL.prev-20260915-*`, run 2 in `/data/ai/TASK-task-MODEL`). Details and log excerpts: results-t2.md §3.1–§3.4.
+
+| model | rust run 1 / run 2 | go run 1 / run 2 | c | functional failures | codebench tg t/s (pinned) | bench tg depth 64 / 4 096 |
+|---|---|---|---|---|---|---|
+| **`flashnext`** k=47 none, 16 thr | PASS 5/5 (32 min) / PASS 5/5 (37 min) | FAIL-infra (cut at 64 min by the owner's power-off, 47/47 comparisons functional) / **PASS 5/5** (79 min) | **PASS 5/5** (463 min, 66.9K generated) | **0** | **2.96** | 3.3 / 2.8 |
+| `qwen122b-iq4` k=47 MTP | PASS (16) / PASS (20) | 4/5 (34) / 4/5 (32) — `bufio.Scanner` 64 KiB | PASS 5/5 (141 min) | 2 | 3.49 | 4.9 / 5.2 |
+| `qwen122b` k=47 MTP | 4/5 (17, read only the first line) / PASS (15) | 4/5 (31) / 4/5 (26) — `bufio.Scanner` 64 KiB | PASS 5/5 (98 min) | 3 | 4.31 | 5.9 / 5.6 |
+
+The c task (bignum with the 1 MB-line stress) is a three-way 5/5 tie and the first T2 result that beats the T0 winner (4/5); it separates
+the models only in wall time (flashnext thinks for hours and then verifies far beyond the spec). The short tasks separate them in
+correctness: the 122B model's go failure is the same deterministic slip in every run.
 
 ## 6. Scoreboard and decision
 
-*(filled in after chain 3)*
+Owner's ranking rule: coding output quality first, speed second (T2 goal ≥ 1.8 t/s, ideal > 3).
+
+| rank | model | functional failures / 5 | tg pinned (codebench) | healthy estimate (×1.3–1.8, unmeasured) | verdict |
+|---|---|---|---|---|---|
+| **1** | **`flashnext`** | **0** | 2.96 | 3.9–5.3 | **T2 winner — `best|t2` frozen 15 Sep 11:20** |
+| 2 | `qwen122b-iq4` | 2 | 3.49 | 4.5–6.3 | deleted 15 Sep 11:15 (owner) |
+| 3 | `qwen122b` | 3 | 4.31 | 5.6–7.8 | deleted 15 Sep 11:15 (owner) |
+
+Decision: `flashnext` — the quality gap is real and reproducible (0 vs 2 vs 3 failures across two independent samples), the speed
+difference is 1.2–1.5× and all three sit above the goal even pinned. Owner: "flash wins, so delete other T2 models". The price is wall
+time (it generated 4.7× the tokens of qwen122b on the c task); `reasoning_effort` is pinned at xhigh on purpose (owner: thinking on,
+effort at maximum). Full reasoning and the freeze record: results-t2.md §4.
 
 ## 7. Infrastructure events, root causes and fixes (all FAIL-infra, none counted against a model)
 
@@ -149,12 +171,40 @@ same VRAM). Flash-Next's ~27 GiB PLE n-gram table lives host-side (`get_rows`), 
 
 ## 8. The frozen configuration
 
-*(after §6)*
+`models.sh` `best|t2` → `flashnext` (`NP=1 CTX=262144 SPEC=none NCMOE=47 IGPU_MOE=0 THREADS=16 THREADS_BATCH=16`), and, for daily use,
+`/data/local-ai/asgard-deployment/llama-tier.sh t2` (= `sudo service llama-t2 start`):
+
+| item | value |
+|---|---|
+| model | `Qwen3.8-Flash-Next-UD-IQ4_XS-0000{1,2,3}-of-00003.gguf`, 87.3 GiB; served ids `qwen3.8-flash-next`, `qwen3coder-local` |
+| binary | `llama.cpp-master/build-vulkan-master/bin/llama-server` (upstream master ≥ b10889 + patches 0001/0002) |
+| placement | `--gpu-layers 99 --device Vulkan0 --fit off --n-cpu-moe 47` → 14.2 GiB VRAM, ~58 GiB pinned host RAM + ~27 GiB lazily mapped n-gram table |
+| context / slots / KV | 262 144 × 1, q8_0 K and V, flash-attn on, `--cache-ram 8192`, `--ctx-checkpoints 8`, batch 2048 / ubatch 1024 |
+| threads | 16 / 16 (the only model where 16 beat 8, +13–23 %) |
+| reasoning | `--jinja --reasoning on --reasoning-budget -1 --chat-template-kwargs {"enable_thinking":true} --reasoning-effort xhigh` |
+| sampling | temp 1.0, top_p 0.95, top_k 20, min_p 0, repeat-penalty 1.0 (Qwen thinking-mode card values) |
+| misc | `--no-warmup` + client-side soft-start ramp, `--load-mode none`, `--spec-type none`, `--timeout 43200`, API key file, host 10.253.254.1:18080 |
+| YaRN x2 | `sudo service llama-t2 start yarn2`: ctx 524 288, `--rope-scaling yarn --rope-scale 2 --yarn-orig-ctx 262144`, KV q4_0, batch 1024/512 — loads (11.2 GiB steady), untested beyond 256K; x4 refused |
+| speed | pinned: pp 79 t/s, tg 3.0 (codebench) / 2.5–2.7 (E2E); load 49–57 s; stop needs KILL after 30 s |
 
 ## 9. Open items
 
-*(after §6; includes: owner BIOS/UEFI review for the pin, whether to run asm for T2 with a healthy GPU, git commit of `/data/local-ai`)*
+- **GPU pin** (owner): UEFI review — AC Adapter Type / Peak Shift / jack centre pin (results-t1.md §6.2); until solved every T2 load pins the
+  GPU and the healthy-regime T2 speed (§6 estimate) stays unmeasured.
+- **asm task for T2** never ran (phase C off: FAIL-infra by cap at ≈3 t/s); run on request with `E2E_CAP` ≥ 8 h.
+- Quality sample is 5 runs per model; the tally was consistent across two samples but small.
+- Owner: commit `/data/local-ai` (asgard-deployment/README.md + llama-tier.sh, the 15 Sep doc refresh), `git pull` on tuxi; later remove the
+  research rc.d `llama` stub + `llama_enable` from rc.conf once the tier services are trusted; delete the c-task scratch in asgard `/tmp`.
 
 ## 10. Artifact index
 
-*(after §6)*
+| what | where |
+|---|---|
+| working log with every number | `results-t2.md` (§0 downloads, §1 build, §2 fits/sweeps/bench, §3 E2E quality, §4 verdict) |
+| restart sheet / operations log | `STATUS.md`, `ops.md` (§6 15 Sep bullets) |
+| chain scripts + logs | `~/local-ai-runs/t2-chain{1,2,3}.sh`, `t2-chain{1,2,3}.log`, `e2e-MODEL.log`, `sweep-MODEL.csv`, `pincheck-*` |
+| E2E projects | `/data/ai/{rust,go,c}-task-MODEL` (run 2) and `…prev-20260915-*` (run 1), each with `summary.txt`; grader `asgard/scoreboard.py` |
+| speed tools | `asgard/bench.py`, `codebench.py`, `ramp.py`, `sweep.sh`; telemetry `~/local-ai-runs/telemetry.csv` |
+| fixes | `patches/0002-vulkan-pad-host-alloc-windows.patch`, `asgard/pinprobe.c`, `asgard/build-vulkan-master.sh`, `--no-warmup` in `serve.sh` |
+| GPU-pin evidence | `~/local-ai-runs/gpu-fingerprint-{healthy,pinned}.txt`, `/var/log/messages` (`acpi_acad0`), results-t1.md §6.2 |
+| frozen configuration | `asgard/models.sh` (`best|t2`), `/data/local-ai/asgard-deployment/` (launcher, rc.d stubs, clients, README) |

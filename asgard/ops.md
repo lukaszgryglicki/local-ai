@@ -519,7 +519,28 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   (`pincheck-t2chain3-end` 15.10 t/s PINNED, `T2_CHAIN3_DONE`). Final T2 tally: flashnext 0 / iq4 2 / qwen122b 3 functional failures
   in 5 runs each. No server running; GPU pinned (a reboot un-pins it). Next: §4 verdict, `best|t2` freeze, report-t2.md §5–10.
 
+- 15 Sep 11:15 — owner: "flash wins, so delete other T2 models" → `rm` of the six `qwen122b` / `qwen122b-iq4` shards + `.verified`
+  markers (~130 GB; ZFS frees asynchronously, `df` lags). 11:20 `models.sh`: `best|t2` → `flashnext` (k=47, 16 thr, SPEC none), qwen122b
+  entries removed, headers of llamactl.sh / qwen.sh / serve.sh updated; smoke test `start.sh best` UP 49 s, 14 191 MiB, one 600-token
+  request, stopped (KILL after 30 s — the 87 GiB mapping always needs it).
+
+- 15 Sep 11:33–12:07 — **deployment** `/data/local-ai/asgard-deployment/` (README.md = the daily cheat sheet). `llama-tier.sh` = self-contained
+  launcher with the frozen knobs inline (one tier at a time, port check, health wait ≤ 30 min, curl soft-start ramp 1→4096 tokens,
+  `.log`/`.out` rotated to `.prev` per run + `llama-tiers.history`); rc.d stubs `llama-t0|t1|t2` (`KEYWORD nostart` → never at boot,
+  `*_enable` defaults to YES inside the stub so plain `service … start` works, `rc_extra_args` carry `yarn2`); `qwen.sh` + `qwen-t0|t1|t2.sh`
+  (asgard direct, tuxi through an on-demand `ssh -fN` tunnel to 127.0.0.1:18080 — tuxi has its own 10.253.254.1); `install.sh` (asgard, run
+  11:33) / `install-tuxi.sh` (tuxi, run 11:38). Tests: t0 UP 15 s, t1 22 s, t2 53 s (rendered prompt "Reasoning effort is set to xhigh"),
+  `status` rc 0/1, start-while-another-tier-runs refused, clients on asgard (`OK`, `7`) and tuxi (`OK` through the tunnel). Finding: FreeBSD
+  `timeout(1)` acts as a reaper and waited for the background tunnel → the tunnel's stdio is detached now (README gotcha). YaRN: x2 = KV q4_0
+  + `--rope-scaling yarn --rope-scale 2 --yarn-orig-ctx 262144`, loads on t0 (14.9 GiB), t1 (peaks 16.0 GiB while loading, 15.0 steady) and
+  t2 (first attempt died: 512K prefill compute buffer 9 312 550 928 B on Vulkan0 → batch 1024/512 for t2 only → 11.2 GiB steady, 3.1 t/s);
+  each answered `17*23`; x4 refused with the KV math; `restart yarn2` passes through rc.subr. All tiers stopped 12:07, GPU idle, still pinned.
+  Owner's instruction: operator stops here; he restarts asgard for the UEFI pin tests.
+
 ## 7. At the real end (when the research phase is over)
+
+- **15 Sep: superseded by `asgard-deployment/`** — the owner wants the tiers started by hand only (never at boot), which is what the
+  `llama-t0|t1|t2` stubs do. The items below remain options for later.
 
 - Boot start: remove `nostart` from the `KEYWORD` line of `asgard/rc.d/llama`, reinstall the stub
   (`sudo install -m 555 asgard/rc.d/llama /usr/local/etc/rc.d/llama`); set `DEFAULT_MODEL` in `llamactl.sh`

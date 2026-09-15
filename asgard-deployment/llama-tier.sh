@@ -15,13 +15,16 @@
 #   common: ctx 262 144 per slot (the models' native maximum), --parallel 1, q8_0 KV, flash-attn, --cache-ram 8192,
 #           sampling temp 1.0 / top_p 0.95 / top_k 20 / min_p 0 (Qwen thinking-mode card values), reasoning on, budget unlimited.
 #
-# Optional "yarn2" (experimental): ctx 524 288 via YaRN x2 (--rope-scaling yarn --rope-scale 2 --yarn-orig-ctx 262144). The
-# doubled KV cache does not fit the card at q8_0 (every tier sits at 14.1-15.2 GiB of 16), so yarn2 switches the KV cache to
-# q4_0 (about the same VRAM as 256K q8_0) - lower KV precision, and long-context quality beyond 256K is untested. yarn4 (1M)
-# cannot fit in 16 GiB VRAM with any KV type and is refused.  sudo service llama-t0 start yarn2  /  YARN=2 ./llama-tier.sh t0 start
+# Optional "yarn2": ctx 524 288 via YaRN x2 (--rope-scaling yarn --rope-scale 2 --yarn-orig-ctx 262144), works on all three tiers
+# (load-tested 15 Sep). The doubled KV cache does not fit the card at q8_0 (every tier sits at 14.1-15.2 GiB of 16), so yarn2
+# switches the KV cache to q4_0; t2 additionally runs batch 1024/512 (its 512K prefill compute buffer needs 9.3 GiB at 2048/1024).
+# VRAM in the test: t0 14.9 GiB, t1 peaks at 16.0 GiB while loading (15.0 steady - no headroom), t2 11.2 GiB steady.
+# Lower KV precision, and long-context quality beyond 256K is an untested extrapolation. yarn4 (1M) cannot fit in 16 GiB VRAM
+# with any KV type and is refused.  sudo service llama-t0 start yarn2  (or restart yarn2)  /  YARN=2 ./llama-tier.sh t0 start
 #
-# Runtime files (service user): ~/local-ai-runs/llama-TIER.pid, llama-TIER.log (server log, previous run kept as .prev),
-# llama-TIER.out (stderr). Nothing here runs at boot (rc.d KEYWORD nostart) or at shutdown.
+# Runtime files (service user): ~/local-ai-runs/llama-TIER.pid, llama-TIER.log (server log) and llama-TIER.out (stderr, a mirror
+# of the log plus startup errors) - both rotated to .prev at every start; llama-tiers.history keeps one line per start/UP/stop.
+# Nothing here runs at boot (rc.d KEYWORD nostart) or at shutdown.
 set -u
 SERVICE_USER=lgryglicki
 HOST=10.253.254.1; PORT=18080; URL="http://$HOST:$PORT"
@@ -31,6 +34,7 @@ KEY_FILE=$LOCAL_AI/key.secret
 BIN_V2=/data/ai/local-agent-poc/src/llama.cpp/build-vulkan-2/bin/llama-server                 # patched build (patches/0001+0002), validated for T0/T1
 BIN_MASTER=/data/ai/local-agent-poc/src/llama.cpp-master/build-vulkan-master/bin/llama-server  # upstream master >= b10889 (Qwen3.8 arch), same patches
 RUNS=${LOCAL_AI_RUNS:-/home/$SERVICE_USER/local-ai-runs}
+HIST=$RUNS/llama-tiers.history
 
 TIER=${1:-}; CMD=${2:-}; ARG=${3:-}
 case "$TIER" in t0|t1|t2) ;; *) echo "usage: $0 t0|t1|t2 start|stop|status|restart [yarn2]" >&2; exit 64 ;; esac
@@ -45,7 +49,7 @@ mkdir -p "$RUNS"
 
 tier_env() {
   NP=1; CTX=262144; SPEC=none; CACHE_RAM=8192; TEMP=1.0; TOP_P=0.95; TOP_K=20; MIN_P=0.0
-  KWARGS='{"enable_thinking":true}'; EFFORT=; NCMOE=0
+  KWARGS='{"enable_thinking":true}'; EFFORT=; NCMOE=0; BATCH=2048; UBATCH=1024
   case "$1" in
     t0) PROFILE=fastest-vram; MODEL=Qwen3.6-35B-A3B-UD-IQ2_M.gguf;  ALIAS=qwen3.6-35b-a3b;    TITLE='Qwen3.6-35B-A3B UD-IQ2_M'
         BIN=$BIN_V2;     NCMOE=0;  THREADS=8;  TBATCH=16 ;;
@@ -58,6 +62,7 @@ tier_env() {
 }
 
 alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
+note() { echo "$(date '+%F %T') $*" | tee -a "$HIST" >> "$OUT"; }
 pid_of() { cat "$RUNS/llama-$1.pid" 2>/dev/null; }
 running_tier() {   # prints the tier whose server is alive (pidfile), if any
   for t in t0 t1 t2; do p=$(pid_of "$t"); alive "$p" && { echo "$t"; return 0; }; done; return 1
@@ -84,7 +89,8 @@ do_start() {
   ROPE=; KV=q8_0
   case "$yarn" in
     "" ) ;;
-    2) CTX=524288; ROPE="--rope-scaling yarn --rope-scale 2 --yarn-orig-ctx 262144"; KV=q4_0 ;;
+    2) CTX=524288; ROPE="--rope-scaling yarn --rope-scale 2 --yarn-orig-ctx 262144"; KV=q4_0
+       [ "$TIER" = t2 ] && { BATCH=1024; UBATCH=512; } ;;   # t2: the 512K prefill compute buffer needs 9.3 GiB at ubatch 1024 (load-tested) - halve it
     4) echo "yarn4 (1M ctx) refused: the KV cache for 1 048 576 tokens does not fit next to the weights in 16 GiB VRAM (T0 would need ~13.6 GiB q8_0 / ~7 GiB q4_0 for KV alone, T2 ~12.8 / ~6.8) and KV in host RAM is not an option on this box" >&2; exit 1 ;;
     *) echo "YARN must be 2 (or unset)" >&2; exit 64 ;;
   esac
@@ -98,14 +104,15 @@ do_start() {
   NCMOE_ARGS=; [ "$NCMOE" -gt 0 ] && NCMOE_ARGS="--n-cpu-moe $NCMOE"
   EFFORT_ARGS=; [ -n "$EFFORT" ] && EFFORT_ARGS="--reasoning-effort $EFFORT"
   [ -f "$LOG" ] && mv "$LOG" "$LOG.prev"
-  echo "=== $(date '+%F %T') start llama-$TIER ($PROFILE: $TITLE) ctx=$CTX ncmoe=$NCMOE threads=$THREADS/$TBATCH kv=$KV${ROPE:+ $ROPE}" >> "$OUT"
+  [ -f "$OUT" ] && mv "$OUT" "$OUT.prev"
+  note "START llama-$TIER ($PROFILE: $TITLE) ctx=$CTX ncmoe=$NCMOE threads=$THREADS/$TBATCH kv=$KV batch=$BATCH/$UBATCH${ROPE:+ $ROPE}"
   t0=$(date +%s)
   # shellcheck disable=SC2086
   GGML_VK_VISIBLE_DEVICES=0 daemon -f -p "$PIDF" -o "$OUT" "$BIN" --model "$MODELS/$MODEL" --alias "$ALIAS,qwen3coder-local" \
     --host "$HOST" --port "$PORT" \
     --ctx-size "$CTX" --parallel "$NP" --gpu-layers 99 --device Vulkan0 --fit off $NCMOE_ARGS $ROPE \
     --flash-attn on --cache-type-k "$KV" --cache-type-v "$KV" --cache-ram "$CACHE_RAM" \
-    --batch-size 2048 --ubatch-size 1024 --threads "$THREADS" --threads-batch "$TBATCH" \
+    --batch-size "$BATCH" --ubatch-size "$UBATCH" --threads "$THREADS" --threads-batch "$TBATCH" \
     --load-mode none --ctx-checkpoints 8 --no-warmup \
     --spec-type "$SPEC" \
     --jinja --reasoning on --reasoning-budget -1 --chat-template-kwargs "$KWARGS" $EFFORT_ARGS \
@@ -122,7 +129,8 @@ do_start() {
   done
   echo "llama-$TIER UP in $(( $(date +%s) - t0 )) s (pid $(cat "$PIDF")) | $PROFILE: $TITLE | ctx $CTX x$NP, KV $KV${ROPE:+, YaRN x$yarn}, experts in RAM: $NCMOE, threads $THREADS/$TBATCH | VRAM $(vram) | $URL"
   [ "${SOFTSTART:-1}" != 0 ] && ramp
-  echo "$(date '+%F %T') UP llama-$TIER pid $(cat "$PIDF") ctx=$CTX kv=$KV vram=$(vram)" >> "$OUT"
+  [ "$TIER" = t1 ] && [ -n "$ROPE" ] && echo "note: t1 yarn2 peaks at ~16.0 of 16.4 GiB VRAM while loading (15.0 steady, load test 15 Sep) - tight; if a start ever fails with 'failed to allocate Vulkan0 buffer', use t0 or t2 for 512K work"
+  note "UP    llama-$TIER pid $(cat "$PIDF") ctx=$CTX kv=$KV vram=$(vram)"
 }
 
 do_stop() {
@@ -133,7 +141,7 @@ do_stop() {
   for i in $(seq 1 30); do alive "$p" || break; sleep 1; done
   alive "$p" && { echo "still alive after 30 s, sending KILL"; kill -9 "$p"; sleep 2; }
   rm -f "$PIDF"
-  echo "$(date '+%F %T') STOP llama-$TIER pid $p" >> "$OUT"
+  note "STOP  llama-$TIER pid $p"
   echo "llama-$TIER stopped (pid $p) | VRAM now $(vram)"
 }
 

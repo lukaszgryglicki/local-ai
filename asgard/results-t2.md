@@ -403,7 +403,7 @@ for the three bold configs):
 5. Prefill 75–83 t/s at depth 4096 for all three (GPU-streamed experts from pinned RAM); depth-64 pp 10–13 t/s is the cold first request.
 
 E2E configs chain 2 uses for §3 (`bestk` + `bestspec`): `qwen122b k=47 draft-mtp,ngram-mod`, `qwen122b-iq4 k=47 draft-mtp,ngram-mod`,
-`flashnext k=47 none` (THREADS stays 8 in the E2E — the t16 gain arrived after chain 2's config was fixed; noted for the freeze).
+`flashnext k=47 none` (the t16 gain arrived after chain 2's config was fixed; phases D/B/A2 and the freeze use THREADS=16).
 Chain 1 ended 13:22 (`T2_CHAIN1_DONE`, end pin check 15.09 t/s PINNED); chain 2 phase A started 13:25.
 
 ## 3. E2E coding tasks — quality first (`t2-chain2.sh`, 14 Sep 13:25 →, all runs GPU pinned ≈ 5 t/s)
@@ -507,3 +507,35 @@ run-1 go was FAIL-infra on the unit-test check. Run-1 projects are kept as `/dat
 | `qwen122b` | 4/5, PASS | 4/5, 4/5 | PASS | **3** | 17 + 15 + 31 + 26 + 98 min |
 
 The 122B go failure is deterministic across four runs at the card's temperature (default `bufio.Scanner` 64 KiB token limit vs the 6 MB single-line input; the T0/T1 35B files and flashnext all read stdin whole) — a reproducible blind spot, not sampling noise. **Chain 3 DONE 11:08:11** (`pincheck-t2chain3-end` 15.10 t/s PINNED, `T2_CHAIN3_DONE`). Verdict → §4.
+
+## 4. T2 verdict — `flashnext` frozen (15 Sep 11:20)
+
+**Winner by the owner's rule (coding output quality first, speed second): `flashnext` = Qwen3.8-Flash-Next UD-IQ4_XS**, k=47 (experts of
+47 of 49 blocks in RAM), 16 threads, `SPEC=none` (no MTP layers in the file), thinking on, `reasoning_effort xhigh` (the template's maximum;
+it accepts only xhigh / medium / low).
+
+| | **`flashnext`** | `qwen122b-iq4` | `qwen122b` |
+|---|---|---|---|
+| functional failures / 5 runs (rust ×2, go ×2, c) | **0** | 2 (go ×2) | 3 (rust run 1, go ×2) |
+| tg out t/s, GPU pinned (codebench / E2E range) | 2.96 / 2.5–2.7 | 3.49 / 3.4–4.0 | 4.31 / 3.6–4.2 |
+| pp in t/s pinned (depth 2 048) | 79 | 77 | 82 |
+| wall of the 5 runs | 611 min (+64 cut) | 243 min | 187 min |
+| VRAM | 14.2 GiB | 14.5 GiB | 14.6 GiB |
+
+Reasoning: the c task is a three-way 5/5 tie, so the ranking rests on rust + go — there the 122B files fail deterministically on the same
+thing (default `bufio.Scanner` 64 KiB token limit vs the 6 MB single-line input, 4 of 4 go runs; `qwen122b` also read only the first line
+in rust run 1) and flashnext never did. flashnext pays in wall time: it thinks for hours (66.9K generated tokens on the c task vs 14.2K) at
+60–70 % of the 122B speed. All three clear the T2 speed goal (≥ 1.8 t/s, ideal > 3) even pinned; flashnext sits on the "ideal" line pinned
+and is estimated at 3.9–5.3 t/s healthy (§7.1 factor ×1.3–1.8 — never measured: every T2 load pins the GPU with the current adapter).
+
+Consequences (15 Sep): owner "flash wins, so delete other T2 models" → the six `Qwen3.5-122B-A10B-UD-{Q4_K_XL,IQ4_XS}-0000?-of-00003.gguf`
+shards and their `.verified` markers deleted at 11:15 (~130 GB). `models.sh`: `best|t2` → `flashnext` with `NP=1 CTX=262144 SPEC=none
+NCMOE=47 IGPU_MOE=0 THREADS=16 THREADS_BATCH=16`, the qwen122b entries removed, the header paragraph records the freeze; smoke test
+`start.sh best` UP 49 s, VRAM 14 191 MiB. Daily use is the deployment `/data/local-ai/asgard-deployment/` (README.md): `sudo service
+llama-t2 start` = these knobs plus `--reasoning-effort xhigh`, verified 11:51 (UP 53 s, rendered system prompt "Reasoning effort is set
+to xhigh", `reasoning_content` present, 3.0 t/s pinned). YaRN x2 (ctx 524 288, KV q4_0; for this model also batch 1024/512 because its
+512K prefill compute buffer needs 9 312 550 928 B at 2048/1024 → "failed to allocate Vulkan0 buffer") loads at 11.2 GiB steady and
+answers (3.1 t/s); x4 cannot fit next to the weights in 16 GiB and is refused by the launcher.
+
+Caveats: (1) the quality sample is 5 runs per model at temperature 1.0 — the 0 / 2 / 3 tally was consistent across both samples but is
+small; (2) the asm task (phase C) was never run for T2 (FAIL-infra by cap at this speed); (3) healthy-regime T2 speed is an estimate.
