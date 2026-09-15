@@ -540,11 +540,21 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
 - 15 Sep 13:20 — **direct Ethernet cable tuxi <-> asgard** (owner plugged it; asgard `em0` = Intel I219, tuxi `ue0` = ASIX AX88179 USB, `axge`):
   static `10.10.10.1` (tuxi, `ifconfig_ue0` in rc.conf) / `10.10.10.2` (asgard, `ifconfig_em0`), names `asgard-eth` / `tuxi-eth` in /etc/hosts,
   ssh aliases with `HostKeyAlias` (known host keys reused), pf `pass all` on both. tuxi pf.conf also NATs the VM net out of `ue0`, and the
-  bhyve VM has `asgard-eth` too. **`/asgard` on tuxi = asgard's `/` via sshfs** (`/data/scripts/mount-asgard.sh mount|umount|status`, as
-  lgryglicki, idmap=user, reconnect; falls back to WiFi; not mounted at boot). Throughput 30 MB/s in every direction (vs 7 MB/s WiFi):
-  the adapter enumerates at **USB 2.0 (480 Mbps) behind a Genesys Logic hub** — move it to a direct USB 3 port for ~110 MB/s
-  (`sudo usbconfig list` must show `spd=SUPER`; devd re-applies `ifconfig_ue0` on re-plug, remount `/asgard` afterwards). GPU after the
-  owner's restart: `HW Power Braking 0 us`, brake not active → un-pinned; no llama/qwen touched (owner's instruction).
+  bhyve VM has `asgard-eth` too. **`/asgard` on tuxi = asgard's `/` via sshfs** (`/data/scripts/mount-asgard.sh mount|umount|status`: a ROOT
+  mount via sudo with allow_other — a user mount gives root/sudo EPERM on FreeBSD fusefs; root ssh uses lgryglicki's key, uids match; reconnect;
+  falls back to WiFi; not mounted at boot). Throughput 30 MB/s in every direction (vs 7 MB/s WiFi):
+  the adapter enumerates at **USB 2.0 (480 Mbps)**. 13:35 re-plug tests: HIGH both on tuxi's right "blue" ports (behind the laptop's
+  internal 2-port GL3523 USB 3.2 hub `uhub4/uhub5`, hub itself links SUPER) and on the left "gray" port (xhci0 root port 2) → the ports are
+  fine and it is **not an `axge`/driver limit** (speed is negotiated by xHCI hardware before any driver attaches): the adapter/plug never
+  trains SuperSpeed. Next test: plug it into asgard's USB-A once (`sudo usbconfig list | grep AX88179`); HIGH there too → replace the adapter
+  (RTL8156 2.5GbE `ure` or another AX88179 with a real USB 3 plug). Always `mount-asgard.sh umount` before, `mount` after a re-plug (devd
+  re-applies `ifconfig_ue0`). GPU after the owner's restart: `HW Power Braking 0 us`, brake not active → un-pinned; no llama/qwen touched.
+- 15 Sep 13:38 — **NVMe check during the owner's `vcp` copy over `/asgard`** (owner's `/data/scripts/temp.sh -w 30` agrees): tuxi
+  2x Crucial P3+ 49-50 C composite (controller 68 C) reading ~12 MB/s each; asgard 4x Kingston KC3000 40-51 C (thresholds 70/77 C).
+  asgard `zroot` is a **4-way GELI mirror** (nda0-3), so every write lands on all four drives (32 MB/s each for a 32 MB/s copy).
+  **nvme3 (pci0:113) runs ~10 C hotter** than its siblings (controller sensor 78 C vs 56-59 C) and carries lifetime HCTM counters
+  "Temperature 1 Transition Count 8 / 895 min" = the earlier overheating episodes under heavy IO — historical, not active now. sshfs at
+  30 MB/s cannot heat them; watch nvme3 when the link gets faster.
 
 ## 7. At the real end (when the research phase is over)
 

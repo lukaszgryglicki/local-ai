@@ -58,7 +58,9 @@ else — the six Qwen3.5-122B shards (~130 GB) were deleted 15 Sep 11:15 on the 
   (rendered prompt "Reasoning effort is set to xhigh"), tuxi clients through the ssh tunnel, yarn2 on t0/t1/t2 (t2 needs batch 1024/512),
   yarn4 refused → ops.md 15 Sep bullets, asgard-deployment/README.md.
 - 13:20 direct Ethernet link tuxi `ue0` 10.10.10.1 <-> asgard `em0` 10.10.10.2 (`asgard-eth` / `tuxi-eth`), `/asgard` sshfs mount on tuxi
-  (`/data/scripts/mount-asgard.sh`); 30 MB/s until the USB adapter moves to a USB 3 port (ops.md). GPU un-pinned after the owner's restart.
+  (`/data/scripts/mount-asgard.sh`, ROOT mount with allow_other); 30 MB/s because the AX88179B adapter only ever links at USB 2.0 — tested
+  on three tuxi ports incl. a root port, not a driver limit → try it on asgard's USB-A, else replace (ops.md 13:20). GPU un-pinned after
+  the owner's restart. 13:38 NVMe temps OK on both hosts during the owner's `vcp` copy; asgard nvme3 is the hot one (ops.md).
 
 
 ## Done 14 Sep — pointers
