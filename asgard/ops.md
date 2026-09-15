@@ -498,6 +498,12 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   → results-t2.md §3.3 row + reading (three-way 5/5 tie on c), STATUS table. **Chain 2 DONE 07:00:46** (end pin check PINNED 16.24 t/s);
   **chain 3 started 07:01**: `flashnext go rust` first (UP 49 s), then `qwen122b rust go`, `qwen122b-iq4 rust go`.
 
+- 15 Sep 08:26 — chain 3 `flashnext` go run 2: **PASS 5/5** (functional 3/3, spec 2/2) in 4 720 s (79 min), 14 turns, ctx max 37K,
+  tg 2.6 t/s, `io.ReadAll` → results-t2.md new §3.4 phase-A2 table, STATUS go cell. rust run 2 started 08:27.
+
+- 15 Sep 09:04 — chain 3 `flashnext` rust run 2: **PASS 5/5** in 2 231 s (37 min), 9 turns, tg 2.7 t/s → §3.4 row; flashnext has
+  0 functional failures in 5 runs. `qwen122b rust go` run 2 started 09:09 (UP 57 s).
+
 ## 7. At the real end (when the research phase is over)
 
 - Boot start: remove `nostart` from the `KEYWORD` line of `asgard/rc.d/llama`, reinstall the stub

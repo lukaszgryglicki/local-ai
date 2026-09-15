@@ -482,3 +482,18 @@ big models earn their size, and none of them looped (39–45 turns vs 86–117 f
 the speed (2.5 vs 3.9 t/s): it thinks for hours and then verifies far beyond the spec. Quality-wise phase B is a three-way tie, so
 the T2 verdict (§4) rests on rust + go, where one sample each gave qwen122b 2 / iq4 1 / flashnext 0 functional failures — hence
 chain 3's second sample (§3.4).
+
+### 3.4 Phase A2 — second rust + go sample (`t2-chain3.sh`, 15 Sep 07:01 →, cap 4 h, GPU pinned)
+
+Why: after phase B the c task is a three-way 5/5 tie, so the quality ranking rests on rust + go, where one sample per task at the
+model card's temperature gave qwen122b 2 / iq4 1 / flashnext 0 functional failures — too thin to freeze a tier on, and flashnext's
+run-1 go was FAIL-infra on the unit-test check. Run-1 projects are kept as `/data/ai/TASK-task-MODEL.prev-20260915-*`.
+
+| model | task | wall | verdict | class | what happened |
+|---|---|---|---|---|---|
+| **`flashnext`** k=47 none | go (run 2) | 4 720 s (79 min; 14 turns, 37K ctx, tg 2.6 t/s, 11.1K generated) | **PASS 5/5** (build ✓ vet ✓ test ✓ nodeps ✓ comparisons 47/47) | **PASS-score** | `io.ReadAll(stdin)` — reads all of stdin (the 6 MB single line included); closes run 1's FAIL-infra gap: flashnext is now **2 for 2 on go**, both functional |
+| **`flashnext`** k=47 none | rust (run 2) | 2 231 s (37 min; 9 turns, 29K ctx, tg 2.7 t/s, 4.7K generated) | **PASS 5/5** (18/18 round-trips, `pub fn reverse`, 4 tests, `chars().rev()`, no unsafe, no deps) | **PASS-score** | `read_to_string` again; run 1 was 32 min / 8 turns — same result, same approach. **flashnext: 5 runs, 5 PASS, 0 functional failures** (rust ×2, go ×2, c) |
+| `qwen122b` k=47 MTP | rust (run 2) | running 09:11 → | | | |
+| `qwen122b` k=47 MTP | go (run 2) | queued | | | |
+| `qwen122b-iq4` k=47 MTP | rust (run 2) | queued | | | |
+| `qwen122b-iq4` k=47 MTP | go (run 2) | queued | | | |
