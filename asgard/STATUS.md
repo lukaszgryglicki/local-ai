@@ -36,10 +36,21 @@ T2-class unknown (never ran healthy) — the §6.1 estimate is ×1.3–1.8 tg, s
 Disk (`/data/local-ai/models`): the T0 file (10.7 GiB), the T1 file (20.8 GiB), the three `flashnext` shards (87.3 GiB). Nothing
 else — the six Qwen3.5-122B shards (~130 GB) were deleted 15 Sep 11:15 on the owner's order.
 
-## What is running right now — 15 Sep 12:15 CEST
+## What is running right now — 15 Sep 14:15 CEST
 
-- **Nothing.** All three tier services are stopped, no chain runs (chains 1/2/3 DONE). Owner restarted asgard 13:12 → GPU **un-pinned**
-  (`HW Power Braking 0 us`). `telemetry.sh` is NOT running after that boot — restart it before the next GPU work (command below).
+- **`flashnext` asm task (phase C), GPU UN-PINNED, on the owner's rc.d service** — the owner started `sudo service llama-t2 start` 13:58
+  (UP 47 s, VRAM 14 191 MiB, `HW Power Braking 0 us`, first hello-world request: pp 78.7 t/s over the 25.8K system prompt, tg 4.9 t/s)
+  and asked for the 4th task with results/speed recorded as usual **plus the un-pinned note**. Launched 14:12:22 (`pch=70 gpu=36C`):
+  `daemon -f -o ~/local-ai-runs/e2e-flashnext-asm.log env LOG=~/local-ai-runs/llama-t2.log E2E_UNSTICK=0 E2E_CAP=28800
+  E2E_NOTE="GPU UN-PINNED ..., server = rc.d llama-t2 deployment service, cap 8 h" ./e2e-all.sh flashnext asm` (cap 8 h → ends by
+  22:12 at the latest). `LOG=` points the timing-slice parser at the service log; `E2E_UNSTICK=0` and `last-start.env` moved to
+  `~/local-ai-runs/last-start.env.hold` so the harness can never kill/restart the owner's service via the research `start.sh --last`
+  (**restore `last-start.env` when the run is over**). health.sh: `OK`, pp 20 / tg 5.9 t/s (28 tokens). `telemetry.sh` running again
+  (GUARD_PCH=108, pid file `~/local-ai-runs/telemetry.pid`, CSV appends). Owner's `vcp` copy over `/asgard` (sftp-server, ~30 MB/s
+  into the 4-way mirror) may overlap — minor CPU/NVMe load, noted if it does.
+  Progress: `tail -f ~/local-ai-runs/e2e-flashnext-asm.log`; `ls -la /data/ai/asm-task-flashnext`; `grep -c '"type"' …/qwen.log`;
+  `sudo service llama-t2 status` (slot busy/idle); owner's `temp.sh` or `tail -3 ~/local-ai-runs/telemetry.csv`.
+  Result goes to results-t2.md §3.5 (new), report-t2.md, the T2 row of the tier table above, ops.md.
 - **Research is over: T0, T1 and T2 are frozen** (T2 = `flashnext`, 15 Sep 11:20, results-t2.md §4; report-t2.md is final). The daily-use
   deployment is **`/data/local-ai/asgard-deployment/`** (its README.md is the cheat sheet): `sudo service llama-t0|llama-t1|llama-t2
   start|stop|status|restart [yarn2]` — installed 11:33, every path tested 11:34–12:07 (t0/t1/t2 start/status/stop, one tier at a time,
@@ -89,7 +100,13 @@ else — the six Qwen3.5-122B shards (~130 GB) were deleted 15 Sep 11:15 on the 
 
 ## How to resume after a crash
 
-- Research is finished — nothing needs resuming. Daily use: `asgard-deployment/README.md`. A tier service that was running when asgard
+- **If the asm run above was cut** (asgard or VM crash): server first (`sudo service llama-t2 start`, wait for UP), then
+  `cd /data/local-ai/asgard && SID=$(grep -o '"session_id":"[0-9a-f-]*"' /data/ai/asm-task-flashnext/qwen.log | tail -1 | cut -d'"' -f4);
+  RESUME=$SID LOG=~/local-ai-runs/llama-t2.log E2E_UNSTICK=0 E2E_CAP=28800 E2E_NOTE="GPU UN-PINNED, rc.d llama-t2, resumed" daemon -f -o
+  ~/local-ai-runs/e2e-flashnext-asm-resume.log ./e2e-test.sh flashnext asm` (existing dir kept, summary/per-request `.prev-*`); check the
+  GPU pin state after the reboot first (a T2 load can pin it again — then the speed part of the record is pinned, say so). Afterwards
+  `mv ~/local-ai-runs/last-start.env.hold ~/local-ai-runs/last-start.env`.
+- Research is finished — nothing else needs resuming. Daily use: `asgard-deployment/README.md`. A tier service that was running when asgard
   died does **not** come back at boot (by design): `sudo service llama-tN start` again; the launcher cleans stale pidfiles itself.
 - After any asgard boot: `GUARD_PCH=108 daemon -f -p ~/local-ai-runs/telemetry.pid /data/local-ai/asgard/telemetry.sh
   ~/local-ai-runs/telemetry.csv` (telemetry does not survive a reboot); `sudo grep acpi_acad0 /var/log/messages | tail` = drop count;

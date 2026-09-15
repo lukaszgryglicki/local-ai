@@ -555,6 +555,15 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   **nvme3 (pci0:113) runs ~10 C hotter** than its siblings (controller sensor 78 C vs 56-59 C) and carries lifetime HCTM counters
   "Temperature 1 Transition Count 8 / 895 min" = the earlier overheating episodes under heavy IO — historical, not active now. sshfs at
   30 MB/s cannot heat them; watch nvme3 when the link gets faster.
+- 15 Sep 14:12 — **phase C for `flashnext` (asm), GPU UN-PINNED, on the rc.d service.** Owner started `sudo service llama-t2 start`
+  13:58 without pinning the GPU (UP 47 s, `HW Power Braking 0 us`; his `temp.sh`: WDOG capped the CPU 5300 → 2600 → 2400 MHz on a
+  core-87 C event during the first hello-world request; that request logged pp 78.7 t/s / 25.8K tokens, tg 4.9 t/s / 20 tokens) and asked
+  for the 4th task with the usual record plus the un-pinned note. Harness reuse against the owner's service instead of `serve.sh`:
+  `LOG=~/local-ai-runs/llama-t2.log` (timing slice from the service log — same `print_timing` lines), `E2E_UNSTICK=0` (unstick.sh would
+  restart via research `start.sh --last`), `~/local-ai-runs/last-start.env` → `.hold` (blocks the harness's crash-restart path too),
+  `E2E_CAP=28800` (8 h like phase B: flashnext generated 66.9K tokens on the c task; at ~5 t/s the 4 h default would be a coin flip),
+  `E2E_NOTE` says un-pinned + rc.d. `telemetry.sh` restarted (GUARD_PCH=108). Launched 14:12:22 via `e2e-all.sh flashnext asm`
+  (wait-ac / wait-no-verify / ramp to 16K as usual); health.sh `OK` pp 20 / tg 5.9 t/s. Owner's `vcp` copy over `/asgard` may overlap.
 
 ## 7. At the real end (when the research phase is over)
 
