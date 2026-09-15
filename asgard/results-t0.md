@@ -577,6 +577,8 @@ verdict below is a model verdict (`FAIL-task`); the only infra events of the who
 | pp t/s aggregate | 591–1 067 | 256–795 | 233–599 | 214–666 |
 | ctx max reached | 132.8K | 229.1K | 141.8K | 234.6K |
 | VRAM @ NP=1 (MiB) | 15 623 | 15 337 | 14 545 | 14 099 |
+| pins the GPU? (14 Sep finding, results-t1.md §6.2) | never observed (all-VRAM) | never observed (all-VRAM) | never observed (all-VRAM) | **never** — all-VRAM (`NCMOE=0`): 0 spontaneous AC drops in ~30 h of runs at 100–125 W GPU; the EC pin needs expert weights streamed from RAM while the GPU boosts (results-t1.md §6.2) |
+| pp in / tg out t/s (bench depth 2 048; healthy → pinned) | — (deleted before the pin era) | — | — | **1 362 / 61.5** healthy → 294 / 16.0 pinned (×4.6 / ×3.8; §6.1 of results-t1.md) |
 | speed goal (> 12, never < 10, ideal 15–25) | met | met on aggregate; **fails the floor at depth** (6.9 t/s @ 200K, 14.3 in the resumed C run) | exceeded | exceeded (worst request 18.1) |
 
 **Winner: `qwen35b` = Qwen3.6-35B-A3B UD-IQ2_M, `SPEC=none`, NP=1, ctx 262 144, `--cache-ram 8192`, patched

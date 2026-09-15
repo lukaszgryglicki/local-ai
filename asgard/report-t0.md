@@ -186,6 +186,8 @@ generated tokens in the asm session alone, zero restarts, zero FAIL-infra.
 | pp t/s aggregate | 591–1 067 | 256–795 | 233–599 | 214–666 |
 | deepest context reached | 132.8K | 229.1K | 141.8K | 234.6K |
 | VRAM at NP=1 (MiB / 16 384) | 15 623 | 15 337 | 14 545 | **14 099** |
+| pins the GPU? (EC boost-lock after an AC drop, found 12–14 Sep; results-t1.md §6.2) | never observed (all-VRAM) | never observed (all-VRAM) | never observed (all-VRAM) | **never** — all-VRAM (`NCMOE=0`): 0 spontaneous AC drops in ~30 h of runs at 100–125 W GPU; the EC pin needs expert weights streamed from RAM while the GPU boosts (results-t1.md §6.2) |
+| pp in / tg out t/s (bench depth 2 048, healthy → pinned) | — | — | — | **1 362 / 61.5** → 294 / 16.0 (if something else pinned the GPU) |
 | T0 speed goal (> 12, never < 10, ideal 15–25) | met | aggregate met, **floor missed at depth** | exceeded | **exceeded at every depth** |
 | spec decoding | `ngram-mod` (+, 17–63 % acc.) | `draft-mtp,ngram-mod` (×1.8–2) | neutral | **`none`** (n-gram −17 %) |
 

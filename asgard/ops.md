@@ -442,6 +442,56 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   START_FAILED (**file has no MTP layers** — not infra), `cpu47-none-pin` 2.69 / 2.50, `cpu47-t16-pin` **3.32** / 2.83. No AC event
   (4 this boot). `T2_CHAIN1_DONE` 13:22; chain 2 phase A (E2E rust+go, pinned) started 13:25 with `qwen122b k=47 MTP`. Full table
   results-t2.md §2.5. `STATUS.md` created 13:10 (live restart sheet, owner's request after the 2nd VM crash) and linked from §1.
+- 14 Sep 13:25–17:14 — chain 2 phase A (pinned): `qwen122b` rust 4/5 (17 min) / go 4/5 (31 min), `qwen122b-iq4` rust **PASS** (16 min) /
+  go 4/5 (34 min), `flashnext` rust **PASS** (32 min) / go cut at 64 min by the **owner's 17:14 power-off** (program complete, 47/47
+  comparisons, no unit tests yet → PASS-functional, FAIL-infra on the test check). Details results-t2.md §3.1. The operator VM died
+  again ≈ 15:30–17:19 (2nd time today); the chains ran on unattended (they are `daemon`-detached), `STATUS.md` was current.
+- 14 Sep 17:17–17:40 — owner cold-restarted asgard (GPU healthy, P0). **`telemetry.sh` had been dead since my 11:48 shutdown** (not
+  restarted at the 12:16 / 17:17 boots) — restarted 17:23 (`GUARD_PCH=108`, `telemetry.pid`); noted for the reboot checklist.
+  Owner: the adapter is **19.5 V ⎓ 12.3 A = 240 W, Dell original per seller** → suspects narrowed to ID-pin/jack contact, adapter
+  transient response, BIOS Peak Shift (results-t1.md §6.2). `models.sh`: `flashnext MODEL_THREADS=16` (+13–23 %, §2.5).
+  Chain 2 restructured: `PHASES` selects phases, default **`DB`** = phase D pinned codebench first (cheap, crash-safe speed numbers),
+  then B (c task); C (asm) only with `PHASES=DBC` (3 × 8 h cap for FAIL-infra rows at 2.5–5.6 t/s is not worth a day).
+  Started 17:27 with the GPU healthy (pin check 61 t/s) and **stopped again at 17:30 before its first T2 prefill** when the owner
+  asked whether the pin is avoidable — the healthy state was the one chance to test the last software lever.
+- 14 Sep 17:36–17:44 — **CPU-turbo-off experiment (drop #8):** `TURBO_DISABLE` bit held for the test, `qwen122b` k=47 MTP load + ramp,
+  0.5-s AC/GPU/CPU sampler → the adapter dropped 0.6 s after the GPU's first 1950 MHz / 100 W boost with the CPU at 1.3 GHz → CPU
+  exonerated, pin unavoidable from software (results-t1.md §6.2). Found the EC mechanism: **HW power-brake pin** (`nvidia-smi -q -d
+  PERFORMANCE` "HW Power Braking" counter 172 s vs 0 healthy; resets on RM re-init, blind at idle). Turbo restored with
+  `thermal-policy -q apply` (verified bit 38 clear); harness `~/local-ai-runs/turbo-off-test.sh`, trace `turbo-off-test.log`.
+  **`/data/scripts/temp.sh`** (owner's request): GPU line now ends with `boost-lock: PINNED (…) / none (…)` — AC drops since the last
+  `---<<BOOT>>---` marker + with a client attached the brake counter and 3 SM/util samples (function `gpu_pin`; copy of the previous
+  version in `~/local-ai-runs/temp.sh.before-pinflag-20260914`; verified on the idle GPU and on the live phase-D server). Chain 2
+  restarted 17:44 `PHASES=DB`: pin check 17:46 PINNED (expected), phase D `qwen122b` codebench started 17:49.
+- 14 Sep 18:05 — owner: every tier table gets the **GPU-pin status per model** + pp/tg → added a "pins the GPU?" (and pp in / tg out
+  healthy → pinned) row/column to results-t0.md §5, report-t0.md §6, results-t1.md §6, results-t2.md §3.1; STATUS.md tier table is now
+  the consolidated final table (winner | pp | tg | pins? | rust go c asm). T0 never (all-VRAM), T1 can (3 of 7 drops), T2 always (5/5).
+  Owner will review UEFI/BIOS settings for the pin later (needs a restart — not now).
+
+- 14 Sep 18:40 — phase D `qwen122b-iq4` codebench: `cpu47-mtp-pin-code,TOTAL,4096,1174.4,3.49` (pp 8.1 / 8.6, both answers capped
+  inside thinking) → results-t2.md §3.2 row, STATUS table; 19 % slower than qwen122b (4.31) on the same prompts. flashnext codebench
+  (`cpu47-none-pin-code`, 16 thr) started 18:41. AC drops still 5 in this boot (no new drop while pinned, as always).
+
+- 14 Sep 19:05 — phase D `flashnext` codebench: `cpu47-none-pin-code,TOTAL,2732,922.7,2.96` (pp 8.6 / 9.7; prompt 0 finished in 684
+  tokens with 606 content chars — the only completed phase-D answer; prompt 1 capped). Phase D order 4.31 > 3.49 > 2.96 → results-t2.md
+  §3.2 + summary paragraph, STATUS table. **Phase B started 18:56**: `qwen122b` c task (UP 61 s, VRAM 15 572 MiB, pinned 1 035 MHz).
+
+- 14 Sep 20:40 — phase B `qwen122b` c task: **PASS 5/5** (functional 4/4, spec 1/1) in 5 869 s (98 min), 39 turns, ctx max 54.0K,
+  tg 3.9 t/s aggregate (2.2–5.2), pp 48 t/s over 104K prompt tokens, 59.7 % draft acceptance, `qwen rc=0`, 0 resumes, no AC drop
+  (still 5 this boot). → results-t2.md new §3.3 phase-B table + STATUS table c cell. `qwen122b-iq4` c started 20:41 (UP 47 s).
+
+- 14 Sep 23:08 — phase B `qwen122b-iq4` c task: **PASS 5/5** in 8 488 s (141 min), 40 turns, ctx max 63.6K, tg 3.6 t/s aggregate
+  (1.8–6.0), pp 45 t/s over 114K prompt tokens, 65.1 % acceptance, `qwen rc=0`, no AC drop (5 this boot), pinned-alloc failures in
+  serve.out still 746. → results-t2.md §3.3 row + reading, STATUS table. `flashnext` c started 23:09 (UP 50 s, VRAM 14 191 MiB).
+
+- 14 Sep 23:25 — `~/local-ai-runs/t2-chain3.sh` (chain 2 copy: waits for `T2_CHAIN2_DONE`, `MODELS` overridable, default `PHASES=A` =
+  phase A2 second sample rust+go, flashnext `go rust` first, no start pin check, `T2_CHAIN3_DONE`) started detached (pid 71253,
+  daemon 70653). Purpose: n=2 per rust/go task for the quality verdict + a graded flashnext go row. STATUS updated.
+
+- 14 Sep 23:58 — `report-t2.md` DRAFT created (report-t0 shape): §1 tier/rules, §2 box (2 builds + patches 0001/0002, ARC 2 GiB,
+  pinned regime), §3 method (fit ladder, sweep, phase D, E2E caps 4/8 h, asm not run, rust+go ×2), §4 candidates, §7 infra (pin,
+  driver windows patch, master build, cuts). §5/§6/§8–10 wait for chain 3. flashnext c: first response still generating (4.6K tokens
+  at 2.65 t/s after 46 min — one long first turn, not a stall).
 
 ## 7. At the real end (when the research phase is over)
 

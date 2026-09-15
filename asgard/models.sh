@@ -57,6 +57,7 @@ model_env() {
       MODEL_EXTRA='Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf:49835229856:577a38a2392b40ca2193cea502e1d92f60b8cd370675d308e0ec21885d9daaa7 Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf:43836407744:d4634e6d84f0ebb0940be15c90d3790bf6464e3dea3a1cddc567dc0e83ad8833'
       MODEL_SPEC=none MODEL_CACHE_RAM=8192 MODEL_NCMOE=all MODEL_IGPU_MOE=0 MODEL_KWARGS='{"enable_thinking":true}'
       MODEL_BIN=/data/ai/local-agent-poc/src/llama.cpp-master/build-vulkan-master/bin/llama-server   # arch needs master >= b10889 (build-vulkan-master.sh)
+      MODEL_THREADS=16   # +23 % tg at depth 64 / +13 % at 4096 vs 8 threads (pinned, 14 Sep results-t2.md §2.5) - the 51B n-gram table is CPU work; the qwen122b files lose with 16
       MODEL_TEMP=1.0 MODEL_TOP_P=0.95 MODEL_TOP_K=20 MODEL_MIN_P=0.0 ;;     # NCMOE=all until the fit ladder; sampling = Qwen thinking defaults until the card is checked
     qwen122b) # T2 "best" candidate: Qwen3.5-122B-A10B (MTP head), UD-Q4_K_XL, 3 shards = 73.3 GiB (plan §4 T4 row)
       MODEL_DIR=UD-Q4_K_XL MODEL_FILE=Qwen3.5-122B-A10B-UD-Q4_K_XL-00001-of-00003.gguf MODEL_ALIAS=qwen3.5-122b-a10b MODEL_TITLE='Qwen3.5-122B-A10B UD-Q4_K_XL (MTP)'

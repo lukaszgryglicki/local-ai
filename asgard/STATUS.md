@@ -24,24 +24,37 @@ running, what is done, what is next and how to resume — nothing else. Updated 
 
 ## Tier state
 
-| tier | state | winner / candidates | where |
-|---|---|---|---|
-| T0 `vram\|t0` | **frozen 13 Sep** | `qwen35b` (Qwen3.6-35B-A3B UD-IQ2_M, all-VRAM) 60.6 t/s; E2E rust 5/5 go 5/5 c 4/5 asm 2/4 | results-t0.md §4, report-t0.md |
-| T1 `fast\|t1` | **frozen 14 Sep 07:20** | `qwen35b-q4` (UD-Q4_K_XL, `NCMOE=20 THREADS=8 SPEC=none`) 31.4 t/s; rust 4/5 spec-only, go 5/5, c 5/5, asm 0/4 (cap) — 0 functional failures | results-t1.md §6, §6.3 |
-| T2 `best\|t2` | **in progress** | `qwen122b` (Qwen3.5-122B-A10B UD-Q4_K_XL, MTP), `qwen122b-iq4` (UD-IQ4_XS, MTP), `flashnext` (Qwen3.8-Flash-Next UD-IQ4_XS, **no MTP layers** in the file) — all `bestk` = 47 | results-t2.md §2.3–2.5 |
+| tier / profile | state | winner (frozen knobs) | **pp in t/s** (healthy → pinned) | **tg out t/s** (healthy → pinned) | **pins the GPU?** | rust | go | c | asm | where |
+|---|---|---|---|---|---|---|---|---|---|---|
+| T0 `vram\|t0` | **frozen 13 Sep** | `qwen35b` Qwen3.6-35B-A3B UD-IQ2_M, all-VRAM, `SPEC=none NCMOE=0` | 1 362 → 294 (depth 2 048) | 61.5 (codebench 60.6) → 16.0 | **never** (all-VRAM; 0 drops in ~30 h) | PASS 5/5 | PASS 5/5 | 4/5 (malformed lines) | 2/4 (4-h cap) | results-t0.md §4–5, report-t0.md §6 |
+| T1 `fast\|t1` | **frozen 14 Sep 07:20** | `qwen35b-q4` UD-Q4_K_XL, `NCMOE=20 THREADS=8 SPEC=none` | 831 → 96 | 32.5 (codebench 31.4) → 11.0 | **can** — 3 of 7 drops were T1-class loads, not every load | 4/5 spec-only (0 functional) | PASS 5/5 | PASS 5/5 | 0/4 (cap) | results-t1.md §6, §6.1–6.3 |
+| T2 `best\|t2` | **in progress** (winner by quality) | `qwen122b` Qwen3.5-122B-A10B UD-Q4_K_XL, k=47 MTP | 82 (pinned only) | 5.9 / 5.6 bench (depth 64 / 4 096), **4.3 codebench** | **always** (5/5 T2 loads) | 4/5 (first line only) | 4/5 (Scanner 64 KiB) | **PASS 5/5** (98 min, 39 turns, 3.9 t/s) | off by default | results-t2.md §2.5, §3 |
+| | | `qwen122b-iq4` UD-IQ4_XS, k=47 MTP | 77 (pinned) | 4.9 / 5.2 bench, **3.5 codebench** | **always** | PASS 5/5 | 4/5 (Scanner 64 KiB) | **PASS 5/5** (141 min, 40 turns, 3.6 t/s) | off | |
+| | | `flashnext` Qwen3.8-Flash-Next UD-IQ4_XS, k=47 none, 16 thr (no MTP layers) | 79 (pinned) | 3.3 / 2.8 bench, **3.0 codebench** | **always** | PASS 5/5 | PASS-functional 47/47 (cut before unit tests) | phase B → | off | |
+
+Pinned/healthy factors (results-t1.md §6.1): all-VRAM ×3.8 tg / ×4.6 pp; T1-class (half the experts in RAM) ×2.9 tg / ×8.7 pp;
+T2-class unknown (never ran healthy) — the §6.1 estimate is ×1.3–1.8 tg, so `qwen122b` would be ~7–10 t/s on a healthy GPU.
 
 Disk (`/data/local-ai/models`, 250 GB used): the T0 file, the T1 file, the three T2 files. Nothing else.
 
-## What is running right now — 14 Sep 15:10 CEST
+## What is running right now — 14 Sep 23:25 CEST
 
-- **`t2-chain1.sh`: DONE** 13:22 (`T2_CHAIN1_DONE`; all pinned placement rows in results-t2.md §2.5). No rerun needed.
-- **`t2-chain2.sh`** (PIDs 87577 daemon / 88041 sh, started 12:25): **phase A** — `qwen122b` done (rust 4/5, go 4/5, both
-  FAIL-task-score "all of stdin" slips); **`qwen122b-iq4` k=47 MTP: rust PASS 5/5 (16 min), go running since 14:48**; then
-  `flashnext` (k=47 none) rust+go. Then phase B (c, cap 8 h × 3), C (asm, cap 8 h × 3), D (pinned codebench × 3). All pinned.
-  Logs: `~/local-ai-runs/t2-chain2.log`, `~/local-ai-runs/e2e-MODEL.log`; projects `/data/ai/TASK-task-MODEL/summary.txt`
-  (results table: results-t2.md §3.1). Touch `~/local-ai-runs/t2-stop` to end the chain after the current task.
-- Expected timeline (pinned): phase A ≈ until 16:30; B ≈ 16:30 → 15 Sep early morning; C after that. The operator polls every ~20–30 min.
-- Interim quality picture: `qwen35b-q4` (T1, 0 functional failures) > `qwen122b` (2 functional failures); `qwen122b-iq4` clean so far.
+- **`t2-chain1.sh`: DONE** 13:22 (results-t2.md §2.5). **Phase A of chain 2: DONE** 17:14 (results-t2.md §3.1 + summary table):
+  `qwen122b` 2 functional failures, `qwen122b-iq4` 1, `flashnext` 0 (go cut by the owner's power-off after the program was complete).
+- **`t2-chain2.sh` running since 17:44 with `PHASES=DB`** (GPU pinned since drop #8 at 17:37:45 — the turbo-off experiment, see below). **Phase D DONE 19:05** (§3.2): `qwen122b` **4.31**, `qwen122b-iq4` **3.49**, `flashnext` **2.96** t/s pinned. **Phase B running since 18:56**: `qwen122b` c **PASS 5/5** in 98 min (18:58–20:40, results-t2.md §3.3 — the first T2 result better than T0's and equal to T1's); `qwen122b-iq4` c **PASS 5/5** in 141 min (20:47–23:08); **`flashnext` c running 23:09 →** (2.5–3 t/s, no MTP → expect 2–4 h, i.e. ~01:00–03:00 15 Sep; cap 8 h). After it chain 2 ends (`T2_CHAIN2_DONE`). **`t2-chain3.sh` started 23:25, idling until that marker**, then runs a **second phase-A sample** (rust + go, cap 4 h, pinned) for `flashnext` (go first — its run-1 go is FAIL-infra on the unit-test check), `qwen122b`, `qwen122b-iq4` (~3.5–4 h → done ~05:00–07:00 15 Sep; log `~/local-ai-runs/t2-chain3.log`; run-1 projects are kept as `/data/ai/TASK-task-MODEL.prev-TS`). Reason: the quality ranking (qwen122b 2 / iq4 1 / flashnext 0 functional failures) rests on one sample per task at temperature 1.0 — two samples × 2 tasks + c make the §4 verdict defensible. Then §4 verdict + report-t2.md (**draft written 23:58**: §1–4 and §7 final, §5/6/8–10 pending). Chain design: pin check → **phase D** pinned codebench per model (`cpu47-mtp-pin-code`
+  for the qwen122b files, `cpu47-none-pin-code` for flashnext with THREADS=16; ~15 min each) → **phase B** c task per model (cap 8 h
+  each, pinned; T1's c took 54–118 min at 4–6× our speed → expect 3–8 h per model, i.e. into 15 Sep). Phase C (asm) is **off** by
+  default (FAIL-infra by cap at 2.5–5.6 t/s); `PHASES=DBC` if the owner wants it.
+  Logs: `~/local-ai-runs/t2-chain2.log`, `~/local-ai-runs/e2e-MODEL.log`, `sweep-MODEL.csv` (`*-code,TOTAL` rows); projects
+  `/data/ai/c-task-MODEL/summary.txt`. Touch `~/local-ai-runs/t2-stop` to end the chain after the current task.
+- **`telemetry.sh`** running again since 17:23 (`~/local-ai-runs/telemetry.csv`, 5 s samples, GUARD_PCH=108) — it does **not** survive
+  a reboot: restart it after every boot (`GUARD_PCH=108 daemon -f -p ~/local-ai-runs/telemetry.pid /data/local-ai/asgard/telemetry.sh
+  ~/local-ai-runs/telemetry.csv`).
+- **Pin is unavoidable from software (17:36–17:40 experiment):** CPU turbo disabled, `qwen122b` load + ramp on a healthy GPU → AC drop
+  #8 0.6 s after the GPU's first 1950 MHz / 100 W boost, CPU at 1.3 GHz. Mechanism = EC **hardware power-brake** (`nvidia-smi -q -d
+  PERFORMANCE` → "HW Power Braking" counter > 0 in the session that got pinned; 0 in sessions that start pinned). `/data/scripts/temp.sh`
+  shows `boost-lock: PINNED/none/unclear` on the GPU line (AC drops since the last boot marker + SM/util samples with a client). Adapter = 240 W Dell original (owner) → open hardware checks in results-t1.md §6.2 (BIOS "AC Adapter Type", Peak
+  Shift, jack/centre pin). Do not spend cold power-offs on T2 any more.
 
 ## Done today (14 Sep) — pointers
 
@@ -58,12 +71,15 @@ Disk (`/data/local-ai/models`, 250 GB used): the T0 file, the T1 file, the three
 ## Next (in order)
 
 1. ~~Chain 1~~ done (§2.5).
-2. Chain 2 phase A → grade with `scoreboard.py`, results-t2.md **§3** table (PASS-score / FAIL-task-score / FAIL-infra), update
-   this file after every model. Phases B/C/D likewise (B+C are ~8 h caps each × 3 models — expect the run to span into 15 Sep).
-3. T2 verdict by quality → freeze `best|t2` in models.sh, write `report-t2.md`; then cleanup (`/tmp/pinprobe*`,
+2. ~~Phase A~~ done (§3.1). Chain 2 `PHASES=DB`: phase D codebench rows → §3.2 speed table; phase B c task → §3.1 rows; update this
+   file after every result (B is an 8 h cap × 3 models — expect the run to span into 15 Sep).
+3. Phase B results → §3.2; then the T2 verdict by quality. Current standing: no T2 model beats the T1 winner (0 functional failures)
+   yet; `flashnext` is the only clean one. If nothing beats it, `best|t2` may stay unfrozen or point at the best-by-quality with the
+   caveat written down (owner's call — ask with the data).
+4. T2 verdict by quality → freeze `best|t2` in models.sh, write `report-t2.md`; then cleanup (`/tmp/pinprobe*`,
    `/tmp/b2-compile.log` on asgard; `/tmp/t1` on the VM) and remind the owner to commit.
-4. Open owner items: adapter label / BIOS adapter type / jack check (the only real fix for the pin); optional `E2E_CAP=28800`
-   asm rerun of the T1 winner.
+5. Open owner items: BIOS "AC Adapter Type" / Peak Shift / jack centre-pin check (results-t1.md §6.2 — adapter is 240 W); optional
+   `E2E_CAP=28800` asm rerun of the T1 winner; phase C (asm) for T2 only on request.
 
 ## How to resume after a crash
 

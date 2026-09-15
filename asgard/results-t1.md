@@ -652,12 +652,12 @@ unaffected by the pin — greedy decoding produces the same tokens at any clock,
 E2E scoreboard (`scoreboard.py`, verifier checks per task rust 5 / go 5 / c 5 / asm 4; "spec-only" = every functional
 check passed and only a spec check was missed; T0 `qwen35b` = the IQ2_M all-VRAM winner of results-t0.md as reference):
 
-| model | rust | go | c | asm | raw score | functional failures | wall (rust / go / c / asm) |
-|---|---|---|---|---|---|---|---|
-| **`qwen35b-q4`** UD-Q4_K_XL, `NCMOE=20`, 8 thr | 4/5 **spec-only** (`fn reverse(s: &str) -> String` signature not used; 18/18 round-trips) | **PASS 5/5** (6 MB input ok, 47/47 comparisons) | **PASS 5/5** (32 asserts, 420/420 arithmetic lines, malformed + empty input ok) | 0/4 — **hit the 240-min cap while still working** (240K tokens at 15 t/s) | 14/19 | **0** | 155 s / 317 s / 54 min / 240 min (cap) |
-| `kat-q4` Q4_K_L, `NCMOE=19`, 16 thr | **PASS 5/5** | 4/5 functional (`6 MB input rc=1, got=b''`; 46/47 comparisons) | **PASS 5/5** (2 asserts) | 0/4 — **runaway thinking**: one response with a 100 080-char thinking block, cut by the 32 768-token output cap, zero tool calls, no project (40 min) | 14/19 | 1 (+ the runaway) | 136 s / 10 min / 50 min / 40 min |
-| `qwen35b-q8` Q8_0, `NCMOE=29`, 8 thr | 3/5 functional (15/18 round-trips + signature) | 4/5 functional (46/47) | **PASS 5/5** (26 asserts) | FAIL-infra ×2 (machine froze during the 82K-token prefill, §5.3) | 12/15 | 2 | 302 s / 573 s / 118 min / — |
-| T0 `qwen35b` UD-IQ2_M, all VRAM | PASS 5/5 | PASS 5/5 | 4/5 functional (malformed lines) | 2/4 (cap; encode 1/700) | 16/19 | 1 | 110 s / 256 s / 43 min / 240 min (cap) |
+| model | rust | go | c | asm | raw score | functional failures | pp in / tg out t/s (healthy → pinned) | pins the GPU? | wall (rust / go / c / asm) |
+|---|---|---|---|---|---|---|---|---|---|
+| **`qwen35b-q4`** UD-Q4_K_XL, `NCMOE=20`, 8 thr | 4/5 **spec-only** (`fn reverse(s: &str) -> String` signature not used; 18/18 round-trips) | **PASS 5/5** (6 MB input ok, 47/47 comparisons) | **PASS 5/5** (32 asserts, 420/420 arithmetic lines, malformed + empty input ok) | 0/4 — **hit the 240-min cap while still working** (240K tokens at 15 t/s) | 14/19 | **0** | **831 / 32.5** → 96 / 11.0 (×8.7 / ×2.9) | **yes, can** — 3 of the 7 spontaneous drops were T1-class partial-offload prefills (12 Sep 23:10 k=20 bench, 14 Sep 07:02 k=22; q8 13 Sep 10:58), but not on every load: many healthy k=20 rows exist. Risk, not certainty | 155 s / 317 s / 54 min / 240 min (cap) |
+| `kat-q4` Q4_K_L, `NCMOE=19`, 16 thr | **PASS 5/5** | 4/5 functional (`6 MB input rc=1, got=b''`; 46/47 comparisons) | **PASS 5/5** (2 asserts) | 0/4 — **runaway thinking**: one response with a 100 080-char thinking block, cut by the 32 768-token output cap, zero tool calls, no project (40 min) | 14/19 | 1 (+ the runaway) | — / 27.7 → 13.4 (×2.1) | not observed (few loads; same offload class as q4 → same risk) | 136 s / 10 min / 50 min / 40 min |
+| `qwen35b-q8` Q8_0, `NCMOE=29`, 8 thr | 3/5 functional (15/18 round-trips + signature) | 4/5 functional (46/47) | **PASS 5/5** (26 asserts) | FAIL-infra ×2 (machine froze during the 82K-token prefill, §5.3) | 12/15 | 2 | — / 21.5 → 7.6 (×2.8) | **yes** — drop #2, 13 Sep 10:58:07 at its k=29 warm-up | 302 s / 573 s / 118 min / — |
+| T0 `qwen35b` UD-IQ2_M, all VRAM | PASS 5/5 | PASS 5/5 | 4/5 functional (malformed lines) | 2/4 (cap; encode 1/700) | 16/19 | 1 | 1 362 / 61.5 → 294 / 16.0 | **never** (all-VRAM, 0 drops in ~30 h) | 110 s / 256 s / 43 min / 240 min (cap) |
 
 **Why `qwen35b-q4`:**
 
@@ -828,6 +828,50 @@ in §6, which is what the T1 choice rests on.
   "AC adapter type / wattage" line, a known-good 240 W adapter, and the barrel jack (warm / loose after a run). A software-side
   half-measure that remains untested is capping the CPU turbo during T2 work (watchdog `MAX_RATIO` 53 → 35–40) — it trims
   the transient by ~10–20 W, which may or may not be the margin.
+- **Owner's answer (14 Sep 17:25): the adapter is labelled 19.5 V ⎓ 12.3 A = 240 W, sold as a Dell original.** So the adapter is
+  not undersized on paper, and a healthy 240 W supply should not trip at a ~130–200 W platform step. The suspects narrow to:
+  (a) **the adapter-ID handshake** — Dell adapters identify themselves over the barrel's centre pin (1-wire PSID); a worn centre
+  pin / DC-in jack loses the ID for an instant under a current step (I·R at the contact, vibration, heat) and the EC reports
+  the adapter as gone for a few seconds — exactly the 4–10 s `Off Line` signature, and it would happen on load steps only;
+  (b) **the adapter's transient response** — an aged or non-genuine 240 W brick whose output sags on a fast 100 W step until
+  its protection resets; (c) **a BIOS power feature** — Dell *Peak Shift* (runs on battery on a schedule even when plugged in)
+  or *Battery Charge* modes can generate AC-state transitions. **Checks, in order of cost:** (1) BIOS Setup (F2) → System
+  Information → "AC Adapter Type" must read **240 W** (if "Unknown"/lower → ID pin/jack); (2) BIOS → Power → Peak Shift
+  **off**, Advanced Battery Charge off; (3) reseat the plug fully, look for a bent/worn centre pin, feel the plug/jack for heat
+  after a run; (4) a known-good Dell 240 W adapter or a new DC-in cable/board. Nothing on the software side remains untried
+  except the CPU-turbo cap above.
+- **CPU-turbo cap tested and eliminated (14 Sep 17:36–17:40, drop #8).** With the GPU healthy (pin check 61 t/s at 17:28, chain
+  stopped before its first T2 prefill) I set the policy's own `TURBO_DISABLE` bit (MSR 0x1a0 bit 38, held by a 3-s refresh loop
+  because `thermal-policy apply` re-enables turbo every 10 min; restored afterwards with `thermal-policy -q apply`) and loaded
+  `qwen122b` k=47 MTP with the gap-free ramp, sampling AC state / GPU / CPU every 0.5 s (`~/local-ai-runs/turbo-off-test.log`):
+
+  ```
+  17:37:43.7  ac=1  cpu=2400 MHz  gpu=885 MHz  39 W  util 20 %  P3      (ramp running, CPU at its 2.4 GHz base)
+  17:37:44.3  ac=1  cpu=2400       gpu=840      43 W  util 20 %  P3
+  17:37:44.8  ac=1  cpu=1298       gpu=1950    100.9 W util 31 %  P0     <- first boost to the top clock
+  17:37:45.4  ac=0  cpu=799        gpu=1440     58 W  util 31 %  P0     <- adapter gone (Off Line 17:37:45, back 17:37:52)
+  17:37:46.0  ac=0  cpu=900        gpu=1035     43 W  util 94 %  P2     <- pinned from here on
+  ```
+
+  The drop follows the GPU's **first boost to 1950 MHz / ~100 W by < 0.6 s**, with the CPU at 0.8–2.4 GHz and 41 °C. The CPU
+  is exonerated: capping it changes nothing, and it was nearly idle at the moment of the trip. The same ~100 W on the all-VRAM
+  T0 model never trips, so the extra current is what partial offload adds while the GPU boosts — expert weights streamed from
+  host memory (DDR4 + uncore + PCIe PHY at full tilt) on top of the GPU's own step. Nothing in software can take that away
+  short of holding the GPU below its boost clock (`nvidia-smi -lgc`/`-pl`, which the owner has ruled out on this driver) —
+  and even that would only be a guess at the margin. **The pin is unavoidable from software with this adapter/jack.**
+- **How the EC pins (same test):** with the server attached, `nvidia-smi -q -d PERFORMANCE` shows `Clocks Event Reasons
+  Counters → HW Power Braking: 171 910 213 us` at 17:40:40 — 172 s, i.e. every second since the 17:37:45 drop, idle included —
+  against **0 us** in the healthy fingerprint taken at 17:33 (`~/local-ai-runs/gpu-fingerprint-{healthy,pinned}.txt`). The EC
+  asserts the GPU's **hardware power-brake pin** and leaves it asserted; the GPU then cannot leave its 1035 MHz base clock. The
+  "active reasons" bitmask rarely shows `hw-power-brake` (telemetry saw 0x1/0x4 under pinned load), the counter does. Caveats:
+  the counter resets on every RM re-init and only counts while the GPU asks for more than the braked clock, so (a) with no
+  client attached (idle GPU) a pinned GPU is indistinguishable from a healthy one (1035 MHz P0 after the wake-up, counter 0
+  even in `-l 1` loop mode), and (b) a session that *starts* pinned keeps it at 0 (verified 17:46–17:52: the pin-check and
+  phase-D servers started after the drop showed 0 µs at util 99 % / 1035 MHz — the driver never asks for more). The counter
+  is therefore definitive only for the session in which the drop happened; otherwise the SM clock under load decides (never
+  > 1035 MHz when pinned; 1485–1935 healthy). `/data/scripts/temp.sh` now prints the verdict on its GPU line (`boost-lock:
+  PINNED / none / unclear`): AC drops logged since the last `---<<BOOT>>---` marker (idle-safe proxy, 8/8 so far) plus, with
+  a client attached, the brake counter and three quick SM/util samples (any SM > 1035 MHz ⇒ not pinned).
 
 ### 6.3 Final small-task output t/s at the frozen settings — post-reboot, healthy GPU, soft-start on (14 Sep 07:55–08:07, `t1-chain4.sh` step 1)
 

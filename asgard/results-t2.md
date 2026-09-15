@@ -421,4 +421,62 @@ fails — the program is wrong), **FAIL-infra** (cut by cap/crash/outage — not
 | `qwen122b` k=47 MTP | rust | 1 012 s (17 min; 10 turns, 26K ctx, tg 3.8 t/s aggregate, 59.8 % draft acceptance) | 4/5 (build ✓ test ✓ signature ✓ nodeps ✓, **round-trips 15/18**) | **FAIL-task-score** | `main()` uses `read_line` → only the **first line** of stdin is reversed; the spec says "reads all of stdin, strips one trailing newline". Multi-line inputs (`ab\ncd\n` → got `ba`, want `dc\nba`) fail. `reverse()` itself is right (Unicode by chars, 4 unit tests incl. Polish). A spec-reading slip, the opposite of the T1 winner's spec-only miss (T1 q4: 18/18 round-trips, signature not `pub`). |
 | `qwen122b` k=47 MTP | go | 1 871 s (31 min; 12 turns, 36K ctx, tg 4.6 t/s) | 4/5 (build ✓ vet ✓ test ✓ nodeps ✓, **comparisons 46/47**) | **FAIL-task-score** | `bufio.NewScanner(os.Stdin)` line by line with the default 64 KiB token limit → the 6 MB single-line input fails with `token too long`, rc=1, empty output. Same bug as T1's `kat-q4`; the T1 winner used `io.ReadAll`. The spec says "reads all of standard input" — the same all-of-stdin slip as in its rust solution. Tokenising/counting/sorting/ties are all correct (46/47, 256-line test file). |
 | **`qwen122b-iq4`** k=47 MTP | rust | 984 s (16 min; 11 turns, 25K ctx, tg 3.6 t/s) | **PASS 5/5** (18/18 round-trips, `pub fn reverse`, 4 tests, no deps, no unsafe) | **PASS-score** | `io::stdin().read_to_string` + `strip_suffix('\n')` — reads all of stdin, exactly the spec. The first fully clean T2 result; same weights as `qwen122b`, different quantisation, different sampling path → the two files are *not* interchangeable on a single task (one sample each; see the caveat in §3.3). |
-| `qwen122b-iq4` k=47 MTP | go | running 14:48 → | | | |
+| `qwen122b-iq4` k=47 MTP | go | 2 016 s (34 min) | 4/5 (build ✓ vet ✓ test ✓ nodeps ✓, **comparisons 46/47**) | **FAIL-task-score** | The identical `bufio.Scanner` 64 KiB bug as `qwen122b` (6 MB input → rc=1, empty output). Both quantisations of the 122B model reach for `bufio.Scanner` on "read all of stdin" in Go. |
+| **`flashnext`** k=47 none | rust | 1 895 s (32 min; 8 turns, tg ≈ 2.5 t/s) | **PASS 5/5** (18/18 round-trips, 0 tool errors) | **PASS-score** | Clean first attempt; slowest wall of the rust runs because of its 2.5 t/s pinned tg, but the fewest turns (8). |
+| `flashnext` k=47 none | go | **cut at 3 833 s** (64 min) by the owner's 17:14 power-off (`qwen rc=143`, 3 requests / 6 102 tokens done) | build ✓ vet ✓ nodeps ✓, **comparisons 47/47**, no test file yet → 4/5 | **PASS-functional, FAIL-infra on the unit-test check** | The program on disk was already complete and correct on all 47 comparisons (6 MB input included — it did not fall into the Scanner trap); the model was still working (no `main_test.go`) when the run was killed. Not a quality failure; a rerun would only settle the unit-test spec check. |
+
+**Phase A summary** (functional failures are what the ranking rule counts; spec-only misses noted):
+
+| model | rust | go | functional failures | pp in / tg out t/s (pinned = operating regime; healthy never measured) | pins the GPU? | notes |
+|---|---|---|---|---|---|---|
+| `qwen122b` UD-Q4_K_XL | 4/5 (first line only) | 4/5 (Scanner 64 KiB) | **2** | k=47 MTP: **82 / 5.9** (depth 64) · 82 / 5.6 (depth 4 096); codebench §3.2 | **always** — 5/5 T2 loads (drops #5–#8) | both are "reads all of stdin" slips |
+| `qwen122b-iq4` UD-IQ4_XS | **PASS** | 4/5 (Scanner 64 KiB) | **1** | k=47 MTP: 77 / 4.9 · 77 / 5.2 | **always** | |
+| `flashnext` UD-IQ4_XS | **PASS** | functional PASS (47/47), cut before tests | **0** (+1 FAIL-infra check) | k=47 none, 16 thr: 79 / 3.3 · 79 / 2.8 (no MTP layers in the file) | **always** (drop #5 was its first load) | the only T2 model with no functional failure so far |
+| T1 winner `qwen35b-q4` (reference) | 4/5 spec-only | PASS | 0 | 831 / 32.5 healthy → 96 / 11.0 pinned | can (3 of 7 drops), not every load | results-t1.md §6 |
+| T0 winner `qwen35b` (reference) | PASS | PASS | 0 | 1 362 / 61.5 healthy → 294 / 16.0 pinned | never (all-VRAM) | results-t0.md §4 |
+
+Reading after phase A: on the two short tasks the 122B model is *not* better than the 35B T1 winner — it is worse (2 and 1 functional
+failures vs 0), with a recurring pattern (it does not honour "reads all of stdin"). `flashnext` is clean so far. Phase B (c task) and the
+phase D pinned codebench decide; phase C (asm) is skipped by default — at 2.5–5.6 t/s every asm run would end at the 8 h cap
+(the T1 winner needed 240K tokens in 4 h), three FAIL-infra rows for a day of runtime (`PHASES=DBC` re-enables it).
+
+### 3.2 Phase D — small-task output t/s at each model's E2E config (`codebench.py LABEL 2`, thinking on, greedy, 2 048-token cap per answer, GPU pinned)
+
+The report metric ("speed input and output tok/s" of the final table) at the T2 operating regime; same two coding prompts as the
+T0/T1 `*-final` rows. Chain 2 `PHASES=DB`, restarted 17:44 on the GPU pinned by drop #8 (17:37:45, the turbo-off experiment).
+
+| label (sweep-MODEL.csv) | model / config | tokens | wall s | **tg t/s** | pp t/s (48–51-token prompts) | bench rows at the same config (§2.5, depth 64 / 4 096) | note |
+|---|---|---|---|---|---|---|---|
+| `cpu47-mtp-pin-code` | `qwen122b` k=47 `draft-mtp,ngram-mod` | 4 096 | 949.3 | **4.31** | 8.1 / 9.0 | 5.91 / 5.60 | 17:51–18:07; both answers hit the 2 048-token cap still inside the thinking block (8 624 / 6 608 reasoning chars, 0 content chars) — real-prompt tg is 25 % below the bench tg (long reasoning ⇒ fewer accepted MTP/n-gram drafts) |
+| `cpu47-mtp-pin-code` | `qwen122b-iq4` k=47 `draft-mtp,ngram-mod` | 4 096 | 1 174.4 | **3.49** | 8.1 / 8.6 | 4.94 / 5.21 | 18:12–18:40; both answers capped inside thinking (8 194 / 6 048 reasoning chars, 0 content) — 19 % slower than qwen122b (3.49 vs 4.31) on the same prompts although its bench tg was only 12–16 % lower; IQ4_XS dequant is the bottleneck on real prompts too (§2.4 point 3) |
+| `cpu47-none-pin-code` | `flashnext` k=47 `none`, 16 thr | 2 732 | 922.7 | **2.96** | 8.6 / 9.7 | 3.32 / 2.83 | 18:43–19:05; prompt 0 is the only phase-D answer that **finished** (684 tokens: 1 995 reasoning + 606 content chars — the shortest thinker of the three), prompt 1 capped at 2 048 inside thinking (6 892 chars); no MTP layers ⇒ plain decode, 31 % slower than qwen122b |
+| `t1-final` (reference) | `qwen35b-q4` k=20, healthy GPU | 3 692 | 117.8 | 31.35 | — | pinned `cpu20-pin` 10.98 | results-t1.md §6.3 |
+| `t0-final` (reference) | `qwen35b` all-VRAM, healthy GPU | 3 957 | 65.3 | 60.55 | — | pinned 16.3 | results-t1.md §6.3 |
+
+The pinned prefill of a 50-token prompt at 8–9 t/s (6 s before the first token) is the same host-transfer penalty seen in §2.5
+(pp 82 t/s at depth 4 096): the pinned regime slows prompt processing far more than generation.
+
+**Phase D order (pinned, real coding prompts): `qwen122b` 4.31 > `qwen122b-iq4` 3.49 > `flashnext` 2.96 t/s** (pp 8–10 t/s for all
+three). Extrapolated healthy (×1.3–1.8, results-t1.md §6.1): ≈ 5.6–7.8 / 4.5–6.3 / 3.8–5.3 t/s. Wall time per answer is what the user
+feels: flashnext's shorter reasoning made it the only model to deliver a complete answer inside the 2 048-token cap (238 s) while the
+qwen122b files spent the whole budget thinking (≈ 480–600 s each) — the E2E tasks (§3.1, no cap) are the fair comparison for that.
+
+### 3.3 Phase B — c task (`bignum`: arbitrary-precision + − × on stdin lines, Makefile, `--selftest`, strict + sanitizer builds; cap 8 h, GPU pinned)
+
+The hard task of the set: T0's winner scored 4/5 (blank-line echo), T1's winner PASS 5/5 in 54 min at 20 t/s (results-t1.md §3),
+three T0 candidates failed it outright. Verifier `verify-c.sh` (make, `make test`, `-Werror`, ASan/UBSan, 420 arithmetic vectors up to
+3 000 digits, malformed/blank lines, empty input).
+
+| model | wall | turns / ctx max / tg t/s (aggregate, per-request min–max) | verdict | class | what happened |
+|---|---|---|---|---|---|
+| **`qwen122b`** k=47 MTP | **5 869 s (98 min**, 18:58–20:40) | 39 turns / 54.0K / **3.9** (2.2–5.2); pp 48 t/s aggregate over 104K prompt tokens; 59.7 % draft acceptance | **PASS 5/5** (functional 4/4, spec 1/1): make ✓ `make test` ✓ strict ✓ ASan/UBSan ✓ selftest-under-ASan ✓ **420/420 arithmetic** ✓ malformed/blank ✓ empty ✓ | **PASS-score** | 479-line `bignum.c` (sign + little-endian digit array, `getline` loop — this time it *does* read all of stdin), 40-case `--selftest`, portable Makefile (BSD + GNU make). 39 turns vs the T1 winner's 86: fewer, longer thinking turns (16 shell runs, 9 edits, 7 tool errors — one genuine bug found and fixed by its own ASan run: `s[start + start]` typo in `bigint_new`). Wall 1.8× the T1 winner's at ¼ of its tg. |
+| **`qwen122b-iq4`** k=47 MTP | **8 488 s (141 min**, 20:47–23:08) | 40 turns / 63.6K / **3.6** (1.8–6.0); pp 45 t/s aggregate over 114K prompt tokens; 65.1 % draft acceptance | **PASS 5/5** (functional 4/4, spec 1/1): all eight verifier checks ✓, **420/420 arithmetic** ✓ | **PASS-score** | 760-line `bignum.c` (sign + `unsigned char` digit array, 22 asserts, malloc/free 7/31 — helper-heavy), 40 turns like its Q4_K_XL sibling (19 shell runs, 6 edits, 4 tool errors); found and fixed its own parser bug (`len_a` computed after `p` had moved past the operator) with printf debugging. 1.45× the Q4_K_XL wall for the same score: same turn count, 7 % lower tg and longer answers (21.5K vs 14.2K generated tokens). Accepts `2 * 3` with extra spaces where Q4_K_XL printed `error` — both allowed by the verifier. |
+| `flashnext` k=47 none, 16 thr | running 23:09 → | | | | |
+| T1 winner `qwen35b-q4` (reference, healthy GPU) | 54 min | 86 turns / 110K / 20.1 (16.7–26.1) | PASS 5/5 | PASS-score | results-t1.md §3 |
+| T0 winner `qwen35b` (reference, healthy GPU) | 43 min | 117 turns / 135K / 34.8 | 4/5 (420/420 arithmetic, blank lines echoed) | FAIL-task-score near-miss | results-t0.md §4 |
+
+Reading after two phase-B rows: the c task is where the 122B model earns its size — both quantisations PASS 5/5 (T0's winner got 4/5,
+T1's winner 5/5) in 39–40 turns with 54–64K-token contexts, i.e. they plan more per turn and loop less than the 35B models (86–117
+turns). Phase A's failures were the same "reads all of stdin" slip on trivial programs; here both read the whole input correctly.
+The two quantisations are indistinguishable on quality so far (iq4 1 functional failure in phase A vs 2; both 5/5 here); Q4_K_XL is
+19–31 % faster (§3.2, §2.5), so it stays the `qwen122b` pick unless flashnext's c row changes the order. The T2 verdict (§4) waits for it.
