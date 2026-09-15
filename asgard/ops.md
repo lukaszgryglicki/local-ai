@@ -504,6 +504,9 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
 - 15 Sep 09:04 — chain 3 `flashnext` rust run 2: **PASS 5/5** in 2 231 s (37 min), 9 turns, tg 2.7 t/s → §3.4 row; flashnext has
   0 functional failures in 5 runs. `qwen122b rust go` run 2 started 09:09 (UP 57 s).
 
+- 15 Sep 09:26 — chain 3 `qwen122b` rust run 2: **PASS 5/5** in 883 s (15 min), 11 turns, tg 3.6 t/s, 58.8 % acceptance → §3.4 row.
+  go run 2 running since 09:27.
+
 ## 7. At the real end (when the research phase is over)
 
 - Boot start: remove `nostart` from the `KEYWORD` line of `asgard/rc.d/llama`, reinstall the stub

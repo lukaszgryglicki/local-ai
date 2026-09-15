@@ -493,7 +493,7 @@ run-1 go was FAIL-infra on the unit-test check. Run-1 projects are kept as `/dat
 |---|---|---|---|---|---|
 | **`flashnext`** k=47 none | go (run 2) | 4 720 s (79 min; 14 turns, 37K ctx, tg 2.6 t/s, 11.1K generated) | **PASS 5/5** (build ✓ vet ✓ test ✓ nodeps ✓ comparisons 47/47) | **PASS-score** | `io.ReadAll(stdin)` — reads all of stdin (the 6 MB single line included); closes run 1's FAIL-infra gap: flashnext is now **2 for 2 on go**, both functional |
 | **`flashnext`** k=47 none | rust (run 2) | 2 231 s (37 min; 9 turns, 29K ctx, tg 2.7 t/s, 4.7K generated) | **PASS 5/5** (18/18 round-trips, `pub fn reverse`, 4 tests, `chars().rev()`, no unsafe, no deps) | **PASS-score** | `read_to_string` again; run 1 was 32 min / 8 turns — same result, same approach. **flashnext: 5 runs, 5 PASS, 0 functional failures** (rust ×2, go ×2, c) |
-| `qwen122b` k=47 MTP | rust (run 2) | running 09:11 → | | | |
-| `qwen122b` k=47 MTP | go (run 2) | queued | | | |
+| **`qwen122b`** k=47 MTP | rust (run 2) | 883 s (15 min; 11 turns, 26K ctx, tg 3.6 t/s, 58.8 % acceptance, 1.5K generated) | **PASS 5/5** (18/18 round-trips) | **PASS-score** | Reads all of stdin this time — run 1's `read_line` first-line-only slip did not recur (1 of 2 rust runs functional-failed). The tersest run of the whole T2 set: 1.5K generated tokens |
+| `qwen122b` k=47 MTP | go (run 2) | running 09:27 → | | | |
 | `qwen122b-iq4` k=47 MTP | rust (run 2) | queued | | | |
 | `qwen122b-iq4` k=47 MTP | go (run 2) | queued | | | |
