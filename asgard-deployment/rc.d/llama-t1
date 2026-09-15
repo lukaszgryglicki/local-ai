@@ -1,0 +1,28 @@
+#!/bin/sh
+# PROVIDE: llama_t1
+# REQUIRE: LOGIN
+# KEYWORD: nostart
+#
+# /usr/local/etc/rc.d/llama-t1 - STUB for the frozen asgard llama tier t1 (T1 fast: Qwen3.6-35B-A3B UD-Q4_K_XL, experts of 20 layers in RAM).
+# Every command is /data/local-ai/asgard-deployment/llama-tier.sh; edit that file, never this one.
+#   sudo service llama-t1 start [yarn2] | stop | restart | status        (onestart/onestop/onestatus work as well)
+# KEYWORD nostart = NEVER part of the boot sequence (rcorder -s nostart in /etc/rc), whatever llama_t1_enable says; the
+# default llama_t1_enable=YES below only unlocks the plain start/stop/status/restart (no /etc/rc.conf entry needed).
+# No KEYWORD shutdown = nothing at shutdown either. One tier at a time: llama-tier.sh refuses to start while another tier runs.
+# Source of this file: /data/local-ai/asgard-deployment/rc.d/llama-t1 (installed by asgard-deployment/install.sh).
+
+. /etc/rc.subr
+
+name=llama_t1
+rcvar=llama_t1_enable
+load_rc_config $name
+: ${llama_t1_enable:="YES"}
+: ${llama_t1_ctl:="/data/local-ai/asgard-deployment/llama-tier.sh t1"}
+
+extra_commands="status"
+start_cmd="${llama_t1_ctl} start"
+stop_cmd="${llama_t1_ctl} stop"
+restart_cmd="${llama_t1_ctl} restart"
+status_cmd="${llama_t1_ctl} status"
+
+run_rc_command "$@"
