@@ -537,6 +537,15 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   each answered `17*23`; x4 refused with the KV math; `restart yarn2` passes through rc.subr. All tiers stopped 12:07, GPU idle, still pinned.
   Owner's instruction: operator stops here; he restarts asgard for the UEFI pin tests.
 
+- 15 Sep 13:20 — **direct Ethernet cable tuxi <-> asgard** (owner plugged it; asgard `em0` = Intel I219, tuxi `ue0` = ASIX AX88179 USB, `axge`):
+  static `10.10.10.1` (tuxi, `ifconfig_ue0` in rc.conf) / `10.10.10.2` (asgard, `ifconfig_em0`), names `asgard-eth` / `tuxi-eth` in /etc/hosts,
+  ssh aliases with `HostKeyAlias` (known host keys reused), pf `pass all` on both. tuxi pf.conf also NATs the VM net out of `ue0`, and the
+  bhyve VM has `asgard-eth` too. **`/asgard` on tuxi = asgard's `/` via sshfs** (`/data/scripts/mount-asgard.sh mount|umount|status`, as
+  lgryglicki, idmap=user, reconnect; falls back to WiFi; not mounted at boot). Throughput 30 MB/s in every direction (vs 7 MB/s WiFi):
+  the adapter enumerates at **USB 2.0 (480 Mbps) behind a Genesys Logic hub** — move it to a direct USB 3 port for ~110 MB/s
+  (`sudo usbconfig list` must show `spd=SUPER`; devd re-applies `ifconfig_ue0` on re-plug, remount `/asgard` afterwards). GPU after the
+  owner's restart: `HW Power Braking 0 us`, brake not active → un-pinned; no llama/qwen touched (owner's instruction).
+
 ## 7. At the real end (when the research phase is over)
 
 - **15 Sep: superseded by `asgard-deployment/`** — the owner wants the tiers started by hand only (never at boot), which is what the

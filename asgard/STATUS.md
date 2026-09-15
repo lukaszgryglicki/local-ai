@@ -38,8 +38,8 @@ else — the six Qwen3.5-122B shards (~130 GB) were deleted 15 Sep 11:15 on the 
 
 ## What is running right now — 15 Sep 12:15 CEST
 
-- **Nothing.** All three tier services are stopped (last `llama-t0 stop` 12:07), no chain runs (chains 1/2/3 DONE), GPU idle at
-  0 MiB — still **pinned** (1035 MHz) until the owner's next cold boot. `telemetry.sh` is running (pid 73847; restart it after a boot).
+- **Nothing.** All three tier services are stopped, no chain runs (chains 1/2/3 DONE). Owner restarted asgard 13:12 → GPU **un-pinned**
+  (`HW Power Braking 0 us`). `telemetry.sh` is NOT running after that boot — restart it before the next GPU work (command below).
 - **Research is over: T0, T1 and T2 are frozen** (T2 = `flashnext`, 15 Sep 11:20, results-t2.md §4; report-t2.md is final). The daily-use
   deployment is **`/data/local-ai/asgard-deployment/`** (its README.md is the cheat sheet): `sudo service llama-t0|llama-t1|llama-t2
   start|stop|status|restart [yarn2]` — installed 11:33, every path tested 11:34–12:07 (t0/t1/t2 start/status/stop, one tier at a time,
@@ -57,6 +57,9 @@ else — the six Qwen3.5-122B shards (~130 GB) were deleted 15 Sep 11:15 on the 
 - 11:33–12:07 deployment `asgard-deployment/` (rc.d stubs, `llama-tier.sh`, `qwen*.sh`, installers, README): t0 UP 15 s, t1 22 s, t2 53 s
   (rendered prompt "Reasoning effort is set to xhigh"), tuxi clients through the ssh tunnel, yarn2 on t0/t1/t2 (t2 needs batch 1024/512),
   yarn4 refused → ops.md 15 Sep bullets, asgard-deployment/README.md.
+- 13:20 direct Ethernet link tuxi `ue0` 10.10.10.1 <-> asgard `em0` 10.10.10.2 (`asgard-eth` / `tuxi-eth`), `/asgard` sshfs mount on tuxi
+  (`/data/scripts/mount-asgard.sh`); 30 MB/s until the USB adapter moves to a USB 3 port (ops.md). GPU un-pinned after the owner's restart.
+
 
 ## Done 14 Sep — pointers
 
