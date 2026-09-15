@@ -493,6 +493,11 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
   driver windows patch, master build, cuts). §5/§6/§8–10 wait for chain 3. flashnext c: first response still generating (4.6K tokens
   at 2.65 t/s after 46 min — one long first turn, not a stall).
 
+- 15 Sep 06:58 — phase B `flashnext` c task: **PASS 5/5** in 27 807 s (7 h 43 min, 17 min under the 8 h cap), 45 turns, ctx max 107.6K,
+  tg 2.5 t/s (2.3–2.6), pp 32 t/s, **66.9K generated tokens** (4.7× qwen122b), `qwen rc=0`, 0 resumes, no AC drop (5 this boot).
+  → results-t2.md §3.3 row + reading (three-way 5/5 tie on c), STATUS table. **Chain 2 DONE 07:00:46** (end pin check PINNED 16.24 t/s);
+  **chain 3 started 07:01**: `flashnext go rust` first (UP 49 s), then `qwen122b rust go`, `qwen122b-iq4 rust go`.
+
 ## 7. At the real end (when the research phase is over)
 
 - Boot start: remove `nostart` from the `KEYWORD` line of `asgard/rc.d/llama`, reinstall the stub
