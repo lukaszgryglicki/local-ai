@@ -39,6 +39,7 @@ touches it automatically". Everything llama-side lives in this repo (`/data/loca
 | `asgard/unstick.sh` | stall detector + the two watchdog hooks (§3, §5) |
 | `asgard/zzz-probe.sh` | the S3 probe used in the live test (`state \| ref \| cmp \| pre \| task \| zzz \| post`) |
 | `asgard/e2e-test.sh`, `e2e-all.sh`, `e2e-tasks.sh`, `verify-*.sh`, `sweep.sh`, `telemetry.sh` | the test harness (`results-t0.md`); `e2e-test.sh` runs `unstick.sh watch 30` alongside every task and resumes its qwen session after an API error |
+| `asgard/slotwatch.sh [interval_s]` | **read-only progress of the busy slot** (no completion is sent): `GET /slots` with the API key every 30 s → one line `HH:MM:SS task=ID busy\|idle prompt=N processed=N decoded=N tg=T/S pch= core= gpu=C,W,util%,SMmhz`; `tg` = tokens decoded since the previous sample. Server address `LLAMA_URL` (default the `llama-tier.sh` bind `http://10.253.254.1:18080` — the server does **not** listen on localhost); `next_token` is a list in this build. Start: `daemon -f -p ~/local-ai-runs/slotwatch.pid -o ~/local-ai-runs/slotwatch.log /data/local-ai/asgard/slotwatch.sh 30`; stop: `kill $(cat ~/local-ai-runs/slotwatch.pid)` |
 | `asgard/health.sh` | **sends a real completion** ("Reply with exactly: OK") — only on an idle server; with NP=1 it queues behind a running task and then evicts its KV cache |
 
 System side (asgard):
@@ -149,6 +150,7 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
 | 11:46 | `service llama start` (no MODEL) → `start` again → `restart` → `unstick.sh check`, `start.sh` provenance | start: replayed `qwen9b NP=1`, UP in 6 s; second start: "already running: pid … via start.sh"; restart: stop.sh + replay, 9.1 s total, pidfile updated; check: ok |
 | 12:21 | **llama-server SIGABRT mid-task** (qwen9b asm, ~99K ctx) — not stuck, not thermal | abort text lost (no `daemon -o`, `kern.coredump=0`) → `start.sh` now logs stderr to `~/local-ai-runs/serve.out` and archives old logs in `~/local-ai-runs/logs/`; nobody restarted it (by design: only hung servers were replaced) → `e2e-test.sh` now restarts a vanished server once per resume via `start.sh --last`, task-time only; hand restart 12:34:20, session resumed by the harness 12:34:29 |
 | 15 Sep 15:19 | watchdog + conf + `unstick.sh` patched (§3 PCH policy), `service thermal_watchdog restart` | thermal.log `started: … pch hi/lo 104/98 C stop 106 C (hook set)`; `unstick.sh show` on the live service → `started via service:t2 … restart would be: service llama-t2 start` |
+| 15 Sep 16:43 → 16 Sep 00:26 | `slotwatch.sh` (new, §2) against the live pinned asm run, 30-s cadence | 925 lines, 0 "unreachable"; prompt progress 82 040 → 63.8 t/s pp, `tg` 2.3–2.73 (median 2.47) — agrees with the server-log `per-request.txt` (2.5 aggregate); prefix-cache hits visible as `processed` ≪ `prompt` on later turns |
 | 15 Sep 15:41 | `temp.sh` rewrite (§8.4) run without a client; `gpu_pin llama-server` branch sourced alone | `boost-lock: PINNED (AC dropped 1x this boot, last 15:14:49 …)`; client branch prints the counter-0 variant, no shell errors |
 | 12:43 | **second SIGABRT** 9 min after the restart, first request after a 130K re-encode — `serve.out` caught it: `vk::Device::allocateMemory: ErrorOutOfDeviceMemory`, `Memory allocation of size 269924352 failed`, in `create_checkpoint` → `update_dft` → `state_seq_get_data` (Vulkan staging buffer for a 131 799-token f16 draft-KV slice) | root cause proven with a Vulkan probe: the NVIDIA FreeBSD driver rejects any **single host-visible allocation ≥ 256 MiB** (255 ok, total unlimited); no runtime knob exists (device-buffer knobs only, upstream master unchunked). Hand restart 13:06:2x `NP=1 GGML_VK_ALLOW_SYSMEM_FALLBACK=1 ./start.sh qwen9b`, harness resumed 13:06:28 (downtime 1 381 s, excluded). Flag is not on that code path, so its "success" is coincidence; kept only for this run |
 | 13:10 | `serve.sh`: `DRAFT_KV=q8_0` default (`--spec-draft-type-k/-v`, 1 088 B/token → cap ≈ 247K tokens; `q4_0` clears 262K); `start.sh --last` persists `DRAFT_KV` and `GGML_VK_ALLOW_SYSMEM_FALLBACK` | takes effect at the next server start (pid 87550 still runs f16 draft KV) |
@@ -621,6 +623,11 @@ and the task resumed. By hand after such a `zzz`: `./unstick.sh kill` (or `./sto
 | 16:13 | lazy verified: 0 gguf mappings, `v_vnodepgsin` +0/10 s, wired 93.8 GiB, no "lazy" in the server log |
 | 16:14 | **owner: "pinned is the reality — do NOT power off; settle everything and let T2 do the asm task, measure as before"** |
 | 16:16:03 | `e2e-all.sh flashnext asm` launched on the pinned service (E2E_CAP 8 h, lazy off, watchdog hook live); prefill GPU 99 % at 1035 MHz / 56 W, CPU 900 MHz, PCH 67 °C |
+| 16:43 | `asgard/slotwatch.sh` written and started (§2): first request **82 040 prompt tokens in 1 285 s = 63.8 t/s pinned, lazy off** (44 t/s pinned with the lazy stream at 15:14; 135 un-pinned) → decode 2.62 t/s |
+| 18:56 → 19:57 | the model's files appear: `b64.s` 18:56 (340 lines), `Makefile` 19:37, `test.sh` 19:47, `b64` + `b64.o` 19:57; from then on it debugged test results that flipped from run to run (root cause below, 00:30) |
+| 16:16 → 00:20 | **8 h of pinned decode without incident**: PCH 65–75 °C (avg 68), cores ≤ 83, GPU 38–57 °C / ≤ 66 W / SM ≤ 1035 MHz / util avg 80 %; three turbo-band cap dips (4600/5000 MHz at 16:16, 17:18, 17:31, restored ≤ 20 s), no PCH event, **no AC drop** (count 3 for the boot) |
+| **00:20:14** | **cap hit** (`qwen rc=124`): 43 requests, 104 938 prompt tokens (53 t/s aggregate), 64 314 generated (2.5 t/s), ctx max 161 299, 0 tool errors; `verify-asm.sh` checks 3/15 → **FAIL score 3/4, functional 2/3** — results-t2.md §3.5 |
+| 00:26–00:40 | slotwatch stopped (925 samples, 0 unreachable), `last-start.env` restored, `llama-t2` left idle for the owner. Root cause of the flaky binary: `_start` reads argc at `(%rsp)` (Linux); FreeBSD amd64 passes `ap` in `%rdi` and `%rsp = ((ap−8) & ~15) + 8` → argc at `(%rsp)` *or* `8(%rsp)` by parity of the strings area (+ ASLR stack gap) — 3-instruction probe, results-t2.md §3.5 |
 
 ### 8.2 The steady disk-read stream under load = llama.cpp's lazy per-layer-embedding table
 
@@ -696,6 +703,9 @@ had it open, the service had loaded from the new mount). The fold of `zroot/data
   constant load — the EC's fan curve follows CPU/GPU temperatures, the PCH has no say; CPU caps make the fans slower, not the PCH
   cooler. Hence the watchdog now stops the job at 106 °C instead of capping harder, and the BIOS "Ultra Performance" thermal mode is the
   thing to try. `nvme3` (pci0:113) is the PCH's neighbour: PCH −30 °C, always ~13 °C hotter than nvme0–2.
+- **Confirmed over 8 h (16:16 → 00:20, pinned decode with `--lazy-mode off`): PCH 65–75 °C, avg 68 — steady T2 decode itself does not heat
+  the PCH; the afternoon's two runaways were the lazy NVMe stream plus airflow.** The model load (87 GB in ~45 s → PCH 66 → 87 °C) stays
+  the hottest moment of a T2 start.
 - The watchdog's 5-s ticks are fast enough (PCH +10 °C in 5 s was the worst slope seen); the guard in `telemetry.sh` (GUARD_PCH=108) is
   the last resort behind the watchdog's 106 °C hook.
 - llama-server (master) ignores SIGTERM for > 30 s while a slot is busy (3 of 3 stops today ended in KILL) — a KILL under GPU load is

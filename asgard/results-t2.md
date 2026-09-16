@@ -532,7 +532,33 @@ factor matches the §6.1 estimate (×1.3–1.8), pp is far above it (the GPU doe
 
 **Second attempt — pinned, `--lazy-mode off`, rc.d `llama-t2` pid 86085, launched 16:16:03, cap 8 h** (`e2e-all.sh flashnext asm`,
 `E2E_UNSTICK=0`, watchdog PCH 98/104/106 + hook, telemetry GUARD_PCH=108). Start conditions: PCH 67 °C, GPU 38 °C, wired 93.8 GiB (PLE
-table resident, 0 gguf mappings → no model-file reads during the run). *Result rows follow when the run ends.*
+table resident, 0 gguf mappings → no model-file reads during the run). Ran 16:16:03 → 00:20:14 (16 Sep) = the full **8 h cap**.
+
+| item | measured |
+|---|---|
+| wall / end | **28 800 s = cap** (`qwen rc=124`, "Operation cancelled"); 43 requests, 44 tool calls (run_shell_command 21, read_file 9, write_file 7, edit 3, grep_search 2, todo_write 2), **0 tool errors**; context 90 753 first → **161 299 max** |
+| **pp in t/s (pinned, lazy off)** | first request **82 040 prompt tokens in 1 285 s = 63.8 t/s** (44 t/s pinned *with* the lazy stream at 15:14, 135 un-pinned); later turns 33–52 t/s at 90–160K depth (prefix cache: tens–hundreds of new tokens per turn); 104 938 prompt tokens / 53 t/s aggregate |
+| **tg out t/s (pinned)** | first answer 8 714 tokens at **2.62 t/s**, then 2.3–2.6 per request falling with depth; **2.5 t/s aggregate** (64 314 generated tokens in 25 825 s of decode; `slotwatch.sh` 925 samples: median 2.47, max 2.73); 30 answers ≥ 200 tokens |
+| thermal / power (telemetry, 4 874 rows) | **PCH 65–75 °C (avg 68)** — no runaway in 8 h; cores 39–83 °C (avg 62); GPU 38–57 °C, SM ≤ 1035 MHz, 15–66 W (avg 42), util avg 80 %; watchdog: three turbo-band cap dips (4600/5000 MHz at 16:16, 17:18, 17:31, each restored ≤ 20 s), no PCH event; **no AC drop** (count stayed 3 for the boot) |
+| files (mtime) | `b64.s` 18:56 (340 lines), `Makefile` 19:37, `test.sh` 19:47, `b64` + `b64.o` 19:57 — from 20:00 to the cap the model debugged its own test results (see the root cause below) |
+| `verify-asm.sh` | as+ld ✓, no libc ✓ (static ELF, 3 472 B), `make` ✓, `make test` ✗; **checks 3 ok / 12 failed**: vectors encode 337/700, decode 102/700; blobs encode 13/20, decode 5/20 |
+| verdict | **FAIL (as+ld=1 nolibc=1 checks=0 make=1) score=3/4 functional=2/3 spec=1/1** |
+| class | **FAIL-infra by the harness rule (cap hit)** — *and* independently **FAIL-task-score**: the program as left is wrong (below). No rerun planned: at 2.5 t/s a real attempt needs `E2E_CAP` ≥ 16 h, and T0 (2/4, 4-h cap) / T1 (0/4) never passed asm either — asm stays unsolved on every tier. |
+
+**Why the binary "randomly" prints usage (root cause, found 00:30 with a 3-instruction probe):** `b64.s` reads `argc` at `(%rsp)` and
+`argv[1]` at `16(%rsp)` — the Linux process-entry convention. FreeBSD amd64 (`exec_setregs`) passes the pointer to the argument vector
+`ap` in **`%rdi`** and sets `%rsp = ((ap − 8) & ~15) + 8` for alignment only, so `(%rsp)` is `argc` **or** a zero qword with `argc` at
+`8(%rsp)`, depending on the 16-byte parity of the vector = the total length of the strings area (argv + envp + execpath) and, with
+`kern.elf64.aslr.stack=1`, the random stack gap. Probe (`movq %rsp,%rsi; write(1, rsp, 16)`; ASLR off): `env -i X=1` … `X=1234` →
+`1 <argv0>` (argc at `(%rsp)`), `X=12345678` → `0 1` (argc at `8(%rsp)`). The model's binary, 12 identical `printf abc | ./b64-verify`
+runs with ASLR on → rc `0 0 2 0 2 0 0 2 2 0 0 0` (2 = its usage path); ASLR off → always usage in the verifier's environment. So the
+harness numbers above are a coin toss per exec on top of real decode bugs (decode of 4 096 B → 2 688 B, 1 000 003 B → 999 936 B: data
+dropped at read-chunk boundaries), and the model's own `test.sh` flipped between "passed 457 / failed 943" and "700 / 700" from run to
+run — which is what kept it debugging until the cap. FreeBSD's own `crt1` takes `ap` from `%rdi`; the T0/T1 asm attempts never got
+this far. Lesson for the task prompt (not changed — the rows must stay comparable): the target is FreeBSD, not Linux.
+
+**Speed rows for the T2 row of STATUS.md (pinned, lazy off, real coding task): pp 63.8 t/s at 82K tokens (×1.45 over the lazy-on
+pinned prefill), tg 2.5 t/s aggregate (unchanged: decode is CPU-expert-bound).**
 
 ## 4. T2 verdict — `flashnext` frozen (15 Sep 11:20)
 
@@ -564,4 +590,6 @@ to xhigh", `reasoning_content` present, 3.0 t/s pinned). YaRN x2 (ctx 524 288, K
 answers (3.1 t/s); x4 cannot fit next to the weights in 16 GiB and is refused by the launcher.
 
 Caveats: (1) the quality sample is 5 runs per model at temperature 1.0 — the 0 / 2 / 3 tally was consistent across both samples but is
-small; (2) the asm task (phase C) was never run for T2 (FAIL-infra by cap at this speed); (3) healthy-regime T2 speed is an estimate.
+small; (2) the asm task (phase C) ran once for the winner only (15/16 Sep, pinned, 8-h cap): **FAIL 3/4** — cap hit *and* a wrong program
+(Linux entry convention on FreeBSD + decode chunk bugs, §3.5); no T0/T1 model passed asm either, so it does not move the tally or the verdict;
+(3) healthy-regime T2 speed is an estimate.

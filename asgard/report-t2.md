@@ -67,6 +67,7 @@ marked healthy/extrapolated.
    vectors, ASan/UBSan) with caps of 4 h (rust/go) and **8 h (c)** — T2 generates 4–8× slower than T1, the 4-h cap would
    measure speed, not quality. **asm** (hardest, 240K tokens for the T1 winner at 20 t/s) is **not run for T2**: at 3–5 t/s
    every asm run ends at the cap — three FAIL-infra rows for a day of runtime (`PHASES=C` of `t2-chain2.sh` re-enables it).
+   It was run **once, for the winner only, after the freeze** (owner's request, 15 Sep 16:16 → 16 Sep 00:20, pinned, 8-h cap) → §5.
    rust + go were run **twice** per model (chain 2 phase A, chain 3 phase A2) because one sample per task at the model
    card's temperature is a noisy quality signal; c once (2–3 h per model).
 
@@ -100,6 +101,14 @@ Five E2E coding runs per model (`e2e-test.sh` + `scoreboard.py`, temperature 1.0
 | **`flashnext`** k=47 none, 16 thr | PASS 5/5 (32 min) / PASS 5/5 (37 min) | FAIL-infra (cut at 64 min by the owner's power-off, 47/47 comparisons functional) / **PASS 5/5** (79 min) | **PASS 5/5** (463 min, 66.9K generated) | **0** | **2.96** | 3.3 / 2.8 |
 | `qwen122b-iq4` k=47 MTP | PASS (16) / PASS (20) | 4/5 (34) / 4/5 (32) — `bufio.Scanner` 64 KiB | PASS 5/5 (141 min) | 2 | 3.49 | 4.9 / 5.2 |
 | `qwen122b` k=47 MTP | 4/5 (17, read only the first line) / PASS (15) | 4/5 (31) / 4/5 (26) — `bufio.Scanner` 64 KiB | PASS 5/5 (98 min) | 3 | 4.31 | 5.9 / 5.6 |
+
+**asm (phase C), winner only, one run** (15 Sep 16:16:03 → 16 Sep 00:20:14, rc.d `llama-t2`, GPU pinned, `--lazy-mode off`, cap 8 h):
+**FAIL 3/4** (functional 2/3, spec 1/1) — as+ld ✓, no libc ✓, `make` ✓, checks 3/15 (vectors encode 337/700, decode 102/700). Cap hit =
+FAIL-infra by rule, *and* the program is wrong on its own: its `_start` reads `argc` at `(%rsp)` (Linux convention) while FreeBSD amd64
+passes the vector pointer in `%rdi` and leaves `argc` at `(%rsp)` or `8(%rsp)` by stack parity → the same command randomly prints usage;
+plus data dropped at decode read-chunk boundaries. Speed: pp **63.8 t/s** (82K-token first request), tg **2.5 t/s** aggregate over 64 314
+generated tokens, 43 turns, 0 tool errors; PCH 65–75 °C for 8 h, no incident. No tier has passed asm (T0 2/4, T1 0/4); the T2 verdict
+(§6) rests on rust/go/c and is unchanged. Details: results-t2.md §3.5.
 
 The c task (bignum with the 1 MB-line stress) is a three-way 5/5 tie and the first T2 result that beats the T0 winner (4/5); it separates
 the models only in wall time (flashnext thinks for hours and then verifies far beyond the spec). The short tasks separate them in
@@ -164,6 +173,9 @@ same VRAM). Flash-Next's ~27 GiB PLE n-gram table lives host-side (`get_rows`), 
 
 - **14 Sep 17:14 owner power-off** (to unpin the GPU) cut `flashnext` go at 64 min with the program complete (47/47 comparisons) but
   before its unit-test check → FAIL-infra on that check; re-run in chain 3 (§5).
+- **16 Sep 00:20 asm cap** (8 h at 2.5 t/s, `flashnext`) — FAIL-infra by rule; the program was also functionally wrong (§5), so the row is
+  FAIL either way and no rerun is planned (a real attempt needs `E2E_CAP` ≥ 16 h). The 15 Sep 14:12 un-pinned attempt before it was aborted
+  after two PCH runaways and AC drop #9 (results-t2.md §3.5, ops.md §8).
 - **verify-slow / download thermal episode** 13 Sep 11:59–12:05 (PCH 100 °C, watchdog HOT) during the `qwen122b` shard hashing —
   fixed by size-check-before-hash and 88/78 °C pacing; no model result affected (results-t2.md §0).
 - The **bhyve VM this log was driven from crashed twice** and asgard was cold-cycled several times (owner) during T2; no chain state
@@ -191,7 +203,8 @@ same VRAM). Flash-Next's ~27 GiB PLE n-gram table lives host-side (`get_rows`), 
 
 - **GPU pin** (owner): UEFI review — AC Adapter Type / Peak Shift / jack centre pin (results-t1.md §6.2); until solved every T2 load pins the
   GPU and the healthy-regime T2 speed (§6 estimate) stays unmeasured.
-- **asm task for T2** never ran (phase C off: FAIL-infra by cap at ≈3 t/s); run on request with `E2E_CAP` ≥ 8 h.
+- **asm task for T2**: one pinned run at the 8-h cap → FAIL 3/4 (§5, results-t2.md §3.5); a second sample needs `E2E_CAP=57600` (16 h at
+  2.5 t/s) and would still be one sample — owner's call.
 - Quality sample is 5 runs per model; the tally was consistent across two samples but small.
 - Owner: commit `/data/local-ai` (asgard-deployment/README.md + llama-tier.sh, the 15 Sep doc refresh), `git pull` on tuxi; later remove the
   research rc.d `llama` stub + `llama_enable` from rc.conf once the tier services are trusted; delete the c-task scratch in asgard `/tmp`.

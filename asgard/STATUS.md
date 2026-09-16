@@ -3,8 +3,8 @@
 **Purpose:** the one file to read after a crash of the operator VM, of asgard, or of the chat session. It says what is
 running, what is done, what is next and how to resume — nothing else. Updated by the operator (copilot) at every transition
 (chain start/stop, phase change, incident, verdict); each update carries a CEST timestamp. History and evidence live in
-`results-t*.md` / `ops.md`; this file only points there. Owner commits `/data/local-ai` (last: "Update status 23", 15 Sep 11:52; pending: `asgard-deployment/README.md` +
-`llama-tier.sh` and this doc refresh).
+`results-t*.md` / `ops.md`; this file only points there. Owner commits `/data/local-ai` (last: "Update status 30", 15 Sep 17:00 — `slotwatch.sh`, `.gitignore`,
+temp.sh, launchers are in; pending: this refresh + results-t2.md §3.5 + ops.md §8 + report-t2.md, the asm result of 16 Sep 00:20).
 
 ---
 
@@ -35,7 +35,7 @@ running, what is done, what is next and how to resume — nothing else. Updated 
 |---|---|---|---|---|---|---|---|---|---|---|
 | T0 `vram\|t0` | **frozen 13 Sep** | `qwen35b` Qwen3.6-35B-A3B UD-IQ2_M, all-VRAM, `SPEC=none NCMOE=0` | 1 362 → 294 (depth 2 048) | 61.5 (codebench 60.6) → 16.0 | **never** (all-VRAM; 0 drops in ~30 h) | PASS 5/5 | PASS 5/5 | 4/5 (malformed lines) | 2/4 (4-h cap) | results-t0.md §4–5, report-t0.md §6 |
 | T1 `fast\|t1` | **frozen 14 Sep 07:20** | `qwen35b-q4` UD-Q4_K_XL, `NCMOE=20 THREADS=8 SPEC=none` | 831 → 96 | 32.5 (codebench 31.4) → 11.0 | **can** — 3 of 7 drops were T1-class loads, not every load | 4/5 spec-only (0 functional) | PASS 5/5 | PASS 5/5 | 0/4 (cap) | results-t1.md §6, §6.1–6.3 |
-| T2 `best\|t2` | **frozen 15 Sep 11:20** (quality first) | `flashnext` Qwen3.8-Flash-Next UD-IQ4_XS, `NCMOE=47 THREADS=16 SPEC=none`, thinking on, effort xhigh (= its max) | 79 pinned (short prompt); 82K-token re-prefill **44 pinned → 135 un-pinned**, ramp step 98 → 260 (§3.5) | 3.3 / 2.8 bench, **3.0 codebench**, E2E 2.5–2.7 pinned → **5.5–5.9 un-pinned** (§3.5, 1 725 tokens) | **always** (every T2 load) | PASS 5/5 ×2 | PASS 5/5 (run 1: 47/47 functional, FAIL-infra on the test check) | PASS 5/5 (463 min) | not run (phase C off) | results-t2.md §3.4 tally + §4 verdict; `qwen122b` / `qwen122b-iq4` **deleted 11:15** (their rows stay in results-t2.md §3) |
+| T2 `best\|t2` | **frozen 15 Sep 11:20** (quality first) | `flashnext` Qwen3.8-Flash-Next UD-IQ4_XS, `NCMOE=47 THREADS=16 SPEC=none`, thinking on, effort xhigh (= its max) | 79 pinned (short prompt); 82K-token re-prefill **44 pinned → 135 un-pinned**, ramp step 98 → 260 (§3.5) | 3.3 / 2.8 bench, **3.0 codebench**, E2E 2.5–2.7 pinned → **5.5–5.9 un-pinned** (§3.5, 1 725 tokens) | **always** (every T2 load) | PASS 5/5 ×2 | PASS 5/5 (run 1: 47/47 functional, FAIL-infra on the test check) | PASS 5/5 (463 min) | **FAIL 3/4** at the 8-h cap, pinned (as+ld ✓ nolibc ✓ make ✓, checks 3/15: Linux `_start` argc/argv convention — wrong on FreeBSD — + decode chunk bugs; pp **63.8** / tg **2.5** pinned, lazy off; §3.5) | results-t2.md §3.4 tally + §4 verdict; `qwen122b` / `qwen122b-iq4` **deleted 11:15** (their rows stay in results-t2.md §3) |
 
 Pinned/healthy factors (results-t1.md §6.1): all-VRAM ×3.8 tg / ×4.6 pp; T1-class (half the experts in RAM) ×2.9 tg / ×8.7 pp;
 T2-class measured 15 Sep 14:44–14:59 (results-t2.md §3.5): **×1.7–1.8 tg, ×3.1 long-prompt pp, ×2.7 short-prompt pp** — tg matches the
@@ -44,18 +44,27 @@ T2-class measured 15 Sep 14:44–14:59 (results-t2.md §3.5): **×1.7–1.8 tg, 
 Disk (`/data/local-ai/models`): the T0 file (10.7 GiB), the T1 file (20.8 GiB), the three `flashnext` shards (87.3 GiB). Nothing
 else — the six Qwen3.5-122B shards (~130 GB) were deleted 15 Sep 11:15 on the owner's order.
 
-## What is running right now — 15 Sep 16:20 CEST
+## What is running right now — 16 Sep 00:40 CEST
 
-- **`flashnext` asm task (phase C), GPU PINNED, `--lazy-mode off`, on the rc.d `llama-t2` service (pid 86085, started 16:10:43, UP 66 s,
-  VRAM 14 244 MiB).** Launched 16:16:03: `daemon -f -o ~/local-ai-runs/e2e-flashnext-asm.log env LOG=~/local-ai-runs/llama-t2.log
-  E2E_UNSTICK=0 E2E_CAP=28800 E2E_NOTE="GPU PINNED (AC drop #11 …) …" ./e2e-all.sh flashnext asm` (cap 8 h → ends by 00:16 at the latest;
-  `last-start.env` → `.hold` again, **restore when the run is over**). The aborted 14:12 attempt is archived by the harness as
-  `/data/ai/asm-task-flashnext.prev-20260915-161603` (+ `~/local-ai-runs/e2e-flashnext-asm.aborted-1535.log`). Telemetry pid file
-  `~/local-ai-runs/telemetry.pid` (GUARD_PCH=108); watchdog PCH 98/104/106 + stop/resume hook live (a `PCH STOP` line in
-  `/var/log/thermal.log` = service stopped at 106 °C, restarted when < 98 °C for 60 s, harness resumes within 1800 s).
-  Progress: `tail -f ~/local-ai-runs/e2e-flashnext-asm.log`; `ls -la /data/ai/asm-task-flashnext`; `grep -c '"type"' …/qwen.log`;
-  `sudo service llama-t2 status` (slot busy/idle); `sudo temp.sh` or `tail -3 ~/local-ai-runs/telemetry.csv`.
-  Result goes to results-t2.md §3.5 (second part), report-t2.md, the T2 row above, ops.md §8.
+- **No task is running.** The rc.d `llama-t2` service is **up and idle** (pid 86085 since 15 Sep 16:10:43, GPU pinned, `--lazy-mode off`,
+  VRAM 14 244 MiB, wired 93.8 GiB) — left for the owner (`sudo service llama-t2 stop` when not needed; `service llama-t2 status`). Telemetry
+  runs (`~/local-ai-runs/telemetry.pid`, GUARD_PCH=108), the watchdog runs (PCH 98/104/106 + hook). `slotwatch.sh` stopped 00:26 (log kept:
+  `~/local-ai-runs/slotwatch.log`), `last-start.env` restored from `.hold`. Nothing to resume.
+- **asm run finished — FAIL at the 8-h cap (16:16:03 → 00:20:14):** pp **63.8 t/s** pinned lazy-off at 82K tokens (was 44 with the lazy
+  stream), tg **2.5 t/s** aggregate, 64 314 generated tokens, ctx max 161 299, 0 tool errors; `verify-asm.sh` 3/15 checks → **score 3/4,
+  functional 2/3** = FAIL-infra (cap) *and* FAIL-task-score (the program reads argc at `(%rsp)` — Linux convention; FreeBSD passes the
+  vector in `%rdi` and `(%rsp)` is argc or 0 by parity → random usage; plus decode chunk bugs). PCH 65–75 °C for 8 h, GPU ≤ 66 W, no
+  incident, no AC drop. Evidence: `/data/ai/asm-task-flashnext/{summary.txt,per-request.txt,b64.s,test.sh}`, results-t2.md §3.5 (table +
+  root cause), ops.md §8.1 rows 16:43 → 00:35, report-t2.md §5/§7.4/§9.
+
+## Done 15 Sep 16:00 → 16 Sep 00:40 — pointers
+
+- 16:06–16:09 cold power-off cycle → GPU un-pinned for one minute; 16:10:43 `service llama-t2 start`, **AC drop #11** 16:11:52 at the first ramp
+  step (3 s after UP, CPU ~1 GHz, cores 44 °C) → pinned; owner 16:14: pinned is the regime, no more power-offs — ops.md §8.1/§8.4.
+- 16:16:03 asm run launched pinned (lazy off); 16:43 `asgard/slotwatch.sh` written (`GET /slots` poller, ops.md §2); 18:56–19:57 the model
+  wrote `b64.s`/`Makefile`/`test.sh`; 00:20:14 cap → summary + verdict above; 00:30 argv root cause probed (results-t2.md §3.5).
+- The old 14:12 un-pinned attempt is archived by the harness as `/data/ai/asm-task-flashnext.prev-20260915-161603`
+  (+ `~/local-ai-runs/e2e-flashnext-asm.aborted-1535.log`).
 - **Verified 16:13 (`--lazy-mode off`):** `procstat -v` shows **0 gguf mappings**, no "lazy" line in `llama-t2.out`,
   `vm.stats.vm.v_vnodepgsin` **+0** with the server up, wired **93.8 GiB** (experts + the 26.8 GiB PLE table + KV) — the model-file
   read stream is gone; the PCH sits at 67 °C in prefill.
@@ -63,8 +72,7 @@ else — the six Qwen3.5-122B shards (~130 GB) were deleted 15 Sep 11:15 on the 
   ramp step tripped the adapter again (`acpi_acad0: Off Line` 16:11:52–16:11:54, brake counter 88 s within a minute). The model load
   itself (87 GB from NVMe in ~45 s) pushed the PCH 66 → 87 °C — that is the hottest moment of a T2 start.
 
-## Earlier today (16:00 snapshot, kept for the record)
-
+## 15 Sep 16:00 snapshot (kept for the record)
 
 - **Nothing.** The un-pinned `flashnext` asm attempt (14:12–15:35) was **aborted = FAIL-infra** (results-t2.md §3.5): two PCH runaways
   (guard kills 14:30 and 14:59) and then the 15:14 service restart's first ramp step tripped the adapter (`acpi_acad0: Off Line`
@@ -128,24 +136,24 @@ else — the six Qwen3.5-122B shards (~130 GB) were deleted 15 Sep 11:15 on the 
 
 ## Next (in order)
 
-1. Operator: watch the asm run (see above) — PCH runaways (watchdog hook / guard), adapter events (`sudo grep acpi_acad0 /var/log/messages`),
-   harness resumes. When it ends: `summary.txt` → results-t2.md §3.5 (second part: pinned, lazy off), report-t2.md, T2 row, ops.md §8.1;
-   `mv ~/local-ai-runs/last-start.env.hold ~/local-ai-runs/last-start.env`; leave the service running for the owner (his call to stop it).
+1. Owner: `git add -A && git commit` in `/data/local-ai` (the four docs with the asm result), `git pull` on tuxi. Stop `llama-t2` when not needed (`sudo service llama-t2 stop`) — it holds 94 GiB wired + the GPU.
 2. T0/T1 on `BIN_MASTER` (one build for all tiers): `bench.py`/`codebench.py` pp+tg vs the Sep-4 numbers, one E2E smoke each, then flip
    `BIN=$BIN_V2` → `$BIN_MASTER` in `llama-tier.sh`; keep `build-vulkan-2` until then. Only when the owner is not using a tier.
 3. Owner, when convenient: BIOS Thermal Management **Ultra Performance** (the EC fan curve follows CPU/GPU only — the PCH ran away twice at
    cores 46–69 °C), read the AC adapter wattage (180 vs 240 W), Peak Shift / battery-assist options — all optional now that pinned is the regime.
-4. Owner: `git add -A && git commit` in `/data/local-ai` (temp.sh, launchers, docs, .gitignore), `git pull` on tuxi.
-5. Leftovers to delete when convenient: asgard `/tmp/bignum-*`, `/tmp/leakprobe*`, `/tmp/memleak*`, `/tmp/check_vectors.py`, `/tmp/*.bak*`
+4. Leftovers to delete when convenient: asgard `/tmp/bignum-*`, `/tmp/leakprobe*`, `/tmp/memleak*`, `/tmp/check_vectors.py`, `/tmp/*.bak*`
    (doc/sysctl backups from 15 Sep); VM `/tmp/t1`; optional `zfs set recordsize=128K zroot/data/local-ai-models` (cloned files keep 128K blocks).
+   Keep `/data/ai/asm-task-flashnext/` (evidence: `b64-verify`, `as.err`, `ld.err`, `make.out`, `.vectors-verify.txt`, `per-request.txt`, `summary.txt`).
+5. Optional, owner's call: a second T2 asm sample needs `E2E_CAP=57600` (16 h at 2.5 t/s) — one more FAIL-infra row is likely; no other tier
+   passed asm either (T0 2/4, T1 0/4).
 
 ## How to resume after a crash
 
-- **State machine:** if `llama-t2` is not running and `/data/ai/asm-task-flashnext` has no `summary.txt`, the asm re-run has not happened yet —
-  follow "Next" 3. If it is running: `tail ~/local-ai-runs/e2e-flashnext-asm.log`, `sudo service llama-t2 status`, `tail -3
-  ~/local-ai-runs/telemetry.csv`, `sudo tail /var/log/thermal.log` (a `PCH STOP` line = the watchdog stopped the service at 106 °C and
-  restarts it when the PCH is < 98 °C for 60 s; the harness resumes if `/health` is back within 1800 s, else the manual resume below).
-- **Manual resume of a cut asm run:** server first (`sudo service llama-t2 start`, wait for UP), then `cd /data/local-ai/asgard && SID=$(grep -o
+- **State machine (16 Sep 00:40): nothing in flight.** The asm run ended at its cap (`/data/ai/asm-task-flashnext/summary.txt` 00:20:23); all
+  T2 phases are done and documented. If a run is ever in flight again: `tail ~/local-ai-runs/e2e-*.log`, `sudo service llama-tN status`,
+  `tail -3 ~/local-ai-runs/telemetry.csv`, `sudo tail /var/log/thermal.log` (a `PCH STOP` line = the watchdog stopped the service at 106 °C
+  and restarts it when the PCH is < 98 °C for 60 s; the harness resumes if `/health` is back within 1800 s, else the manual resume below).
+- **Manual resume of a cut E2E run (generic recipe, asm as the example):** server first (`sudo service llama-t2 start`, wait for UP), then `cd /data/local-ai/asgard && SID=$(grep -o
   '"session_id":"[0-9a-f-]*"' /data/ai/asm-task-flashnext/qwen.log | tail -1 | cut -d'"' -f4); RESUME=$SID LOG=~/local-ai-runs/llama-t2.log
   E2E_UNSTICK=0 E2E_CAP=28800 E2E_NOTE="GPU UN-PINNED, resumed" daemon -f -o ~/local-ai-runs/e2e-flashnext-asm-resume.log ./e2e-test.sh
   flashnext asm`; every cut costs a full re-prefill (82K tokens ≈ 10 min un-pinned, 30 min pinned). Afterwards `mv
